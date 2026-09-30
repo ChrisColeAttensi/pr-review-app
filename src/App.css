@@ -404,3 +404,4 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .rv-state.rv-APPROVED { color: var(--add); }
 .rv-state.rv-CHANGES_REQUESTED { color: var(--del); }
 .rv-state.rv-REQUESTED { color: var(--warn); }
+.rv-name .badge.tiny { margin: 0 0 0 6px; }

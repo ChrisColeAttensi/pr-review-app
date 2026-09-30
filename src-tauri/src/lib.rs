@@ -474,6 +474,11 @@ async fn slack_test(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn test_notification(app: AppHandle) {
+    notify(&app, "Review requested · Attensi/example#123", "This is a test notification from PR Review.");
+}
+
+#[tauri::command]
 fn slack_forget(state: tauri::State<AppState>, login: String) {
     slack::forget(&state.data_dir, &login);
 }
@@ -593,7 +598,8 @@ pub fn run() {
             slack_lookup,
             slack_send,
             slack_forget,
-            slack_test
+            slack_test,
+            test_notification
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

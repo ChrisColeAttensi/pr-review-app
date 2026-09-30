@@ -23,6 +23,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string>();
   const [slackMsg, setSlackMsg] = useState<string>();
+  const [notifyMsg, setNotifyMsg] = useState<string>();
 
   useEffect(() => {
     api.settings().then(setS);
@@ -102,7 +103,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 ))}
               </tbody>
             </table>
-            <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
+            <div className="row">
+              <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
+              <span className="spacer" />
+              <button onClick={() => { api.testNotification(); setNotifyMsg("Sent. Nothing showed up? Check System Settings → Notifications → PR Review."); }}>Send test notification</button>
+            </div>
+            {notifyMsg && <p className="muted small">{notifyMsg}</p>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Only requests addressed to me directly (ignore team requests)</label>
             <label className="field">
               <span>Check every</span>

@@ -42,6 +42,7 @@ export const api = {
   slackLookup: (repo: string, number: number, login: string) =>
     invoke<{ user: SlackUser | null; cached: boolean; emails: string[] }>("slack_lookup", { repo, number, login }),
   slackSend: (login: string, user: SlackUser, message: string) => invoke<string>("slack_send", { login, user, message }),
+  testNotification: () => invoke<void>("test_notification"),
   slackTest: () => invoke<string>("slack_test"),
   slackForget: (login: string) => invoke<void>("slack_forget", { login }),
   cleanWorktree: (repo: string, number: number) => invoke<void>("clean_worktree", { repo, number }),

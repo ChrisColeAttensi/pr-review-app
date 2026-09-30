@@ -9,7 +9,7 @@ import type { Snapshot } from "./types";
 import "react-diff-view/style/index.css";
 import "./App.css";
 
-const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "review", "notes"];
+const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "review", "notes", "claude"];
 
 export default function App() {
   const [snap, setSnap] = useState<Snapshot>({ me: "", prs: [], errors: [], fetchedAt: 0, loading: true });
@@ -50,7 +50,7 @@ export default function App() {
       const typing = (e.target as HTMLElement).closest("input, textarea, select");
       if (e.metaKey && e.key === ",") { e.preventDefault(); setSettingsOpen(true); return; }
       if (e.metaKey && e.key === "r") { e.preventDefault(); api.refresh(); return; }
-      if (e.metaKey && /^[1-5]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
+      if (e.metaKey && /^[1-6]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
       if (typing) return;
       if (e.key === "/") { e.preventDefault(); document.getElementById("pr-filter")?.focus(); }
       if (e.key === "j" || e.key === "k") {

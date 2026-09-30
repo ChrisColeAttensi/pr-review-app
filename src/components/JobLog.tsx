@@ -33,7 +33,7 @@ export function JobLog({ job, compact, estimate }: { job: JobInfo; compact?: boo
     <div className={`joblog card ${job.status}`}>
       <div className="joblog-head">
         {running && <span className="spinner" />}
-        <b>{job.kind === "review" ? "pr-review" : "Explaining changes"}</b>
+        <b>{job.kind === "review" ? "pr-review" : job.kind === "chat" ? "Claude is working" : "Explaining changes"}</b>
         <span className="muted">
           {job.status} · {elapsed}
           {running && estimate && (

@@ -15,6 +15,7 @@ export function installMock() {
     p.needsAction = p.categories.includes("reviewRequested") || (p.categories.includes("mine") && (approved || p.ci === "FAILURE"));
   }
   let drafts: unknown[] = [];
+  const chat: { role: string; text: string; ts: number }[] = [];
   const settings = {
     pollIntervalSecs: 120, notifications: true,
     categories: { reviewRequested: true, reReview: true, watched: true, mine: true },
@@ -57,6 +58,12 @@ export function installMock() {
           return { user: { userId: "U01045HJK8X", name: "Johan Helsing", title: "Staff Unity Software Engineer", email: "johan.helsing@attensi.com" }, cached: false, emails: [] };
         case "slack_send": await new Promise((r) => setTimeout(r, 1000)); return "https://attensi.slack.com/archives/D0/p1";
         case "slack_forget": return null;
+        case "pr_chat": return chat;
+        case "pr_index": return {
+          [snapshot.prs[0]?.key]: { reviewHead: snapshot.prs[0]?.headSha, verdict: "🛠️ Change before merge · 2", insightsHead: snapshot.prs[0]?.headSha, drafts: 1, chat: 2 },
+          [snapshot.prs[1]?.key]: { reviewHead: "old", verdict: "✅ Approve — small and safe", insightsHead: null, drafts: 0, chat: 0 },
+        };
+        case "handoff": return null;
         case "slack_test": return "";
         case "test_notification": return null;
         case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
@@ -70,6 +77,13 @@ export function installMock() {
         ];
         case "set_autostart": return args.enabled;
         case "start_job": {
+          if (args.kind === "chat") {
+            chat.push({ role: "user", text: args.message, ts: Date.now() });
+            setTimeout(() => { chat.push({ role: "assistant", text: "Here's what I found:\n\n- The **riskiest** part is the retry loop in `bootstrap.ts`.\n- I'd test a rejected refresh token by hand.", ts: Date.now() }); emit("job-done", { jobId: "c1", job: { id: "c1", prKey: `${args.repo}#${args.number}`, repo: args.repo, number: args.number, kind: "chat", startedAt: Date.now(), status: "done" } }); }, 2500);
+            const job = { id: "c1", prKey: `${args.repo}#${args.number}`, repo: args.repo, number: args.number, kind: "chat", startedAt: Date.now(), status: "running" };
+            setTimeout(() => emit("job-started", job), 20);
+            return job;
+          }
           const job = { id: `j${Date.now()}`, prKey: `${args.repo}#${args.number}`, repo: args.repo, number: args.number, kind: args.kind, startedAt: Date.now(), status: "running" };
           setTimeout(() => {
             emit("job-started", job);

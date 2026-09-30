@@ -443,3 +443,27 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 
 .slack-who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; min-height: 22px; }
 .slack-who .spinner { margin: 0; }
+
+/* ---------- sidebar flags ---------- */
+.pr-flags { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 1px; }
+.flag { font-size: 10.5px; font-weight: 600; color: var(--fg-muted); background: var(--bg-sunk); border-radius: 8px; padding: 0 6px; line-height: 16px; }
+.flag.tone-ok { color: var(--add); background: var(--add-bg); }
+.flag.tone-bad { color: var(--del); background: var(--del-bg); }
+.flag.tone-warn { color: var(--warn); background: var(--warn-bg); }
+.flag.tone-muted { color: var(--fg-muted); }
+
+/* ---------- chat ---------- */
+.chat-tab { display: flex; flex-direction: column; height: 100%; max-width: 980px; min-height: 0; }
+.chat-head { margin-bottom: 10px; }
+.chat-log { flex: 1; min-height: 200px; display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; }
+.bubble { position: relative; padding: 10px 14px; border-radius: 10px; max-width: 88%; }
+.bubble-user { align-self: flex-end; background: var(--bg-sel); }
+.bubble-user .bubble-text { white-space: pre-wrap; }
+.bubble-assistant { align-self: flex-start; background: var(--bg-card); border: 1px solid var(--border); }
+.bubble-error { align-self: flex-start; background: var(--del-bg); color: var(--del); }
+.bubble .copy { position: absolute; top: 6px; right: 6px; font-size: 11px; opacity: 0; }
+.bubble:hover .copy { opacity: 1; }
+.chat-quick { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.chip-btn { font-size: 12px; border-radius: 14px; padding: 3px 10px; }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; position: sticky; bottom: -40px; background: var(--bg); padding: 6px 0 4px; }
+.chat-input textarea { min-height: 60px; }

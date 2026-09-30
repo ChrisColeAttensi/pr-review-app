@@ -121,6 +121,25 @@ pub fn insights_schema() -> Value {
     })
 }
 
+fn chat_note(url: &str) -> String {
+    format!(
+"The user is now talking to you directly, through the chat panel of the PR Review desktop app, about pull request {url}. \
+Any earlier instruction that this was an unattended run, or that you must not edit files, applied only to that automated run: \
+the user may now ask you to change code, run checks, or explain things. The working directory is a git worktree at the PR head. \
+Never post to GitHub (comments, reviews, approvals, merges) and never push until you have shown exactly what you will send \
+and the user has said yes in a later message. Keep replies short and concrete; use markdown."
+    )
+}
+
+fn fresh_chat_prompt(url: &str, report: Option<&str>, message: &str) -> String {
+    let mut p = format!("We are reviewing pull request {url}. Read it with `gh pr view {url}` and `gh pr diff {url}` as needed.\n");
+    if let Some(r) = report {
+        p.push_str(&format!("\nThe pr-review report for it:\n<review-report>\n{r}\n</review-report>\n"));
+    }
+    p.push_str(&format!("\nThe user says:\n{message}"));
+    p
+}
+
 fn insights_prompt(url: &str, report: Option<&str>) -> String {
     let mut p = format!(
 "Explain the pull request {url} to a reviewer who is about to read it.
@@ -164,7 +183,7 @@ fn finish(app: &AppHandle, jobs: &Jobs, id: &str, status: &str, error: Option<St
     let _ = app.emit("job-done", json!({ "jobId": id, "status": status, "error": error, "job": info }));
 }
 
-pub fn start(app: AppHandle, repo: String, number: u64, kind: String) -> Result<JobInfo, String> {
+pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>) -> Result<JobInfo, String> {
     let state = app.state::<AppState>();
     let jobs = state.jobs.clone();
     {
@@ -196,8 +215,11 @@ pub fn start(app: AppHandle, repo: String, number: u64, kind: String) -> Result<
     let data_dir = state.data_dir.clone();
     let app2 = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = run(&app2, &jobs, &id, &settings, &data_dir, &repo, number, &kind) {
+        if let Err(e) = run(&app2, &jobs, &id, &settings, &data_dir, &repo, number, &kind, message.as_deref()) {
             emit_line(&app2, &jobs, &id, json!({ "type": "app_error", "message": e }).to_string());
+            if kind == "chat" {
+                store::push_chat(&data_dir, &repo, number, store::ChatMessage { role: "error".into(), text: e.clone(), ts: now_ms() });
+            }
             finish(&app2, &jobs, &id, "failed", Some(e));
         }
     });
@@ -218,8 +240,13 @@ fn run(
     repo: &str,
     number: u64,
     kind: &str,
+    message: Option<&str>,
 ) -> Result<(), String> {
     let started = now_ms();
+    if kind == "chat" {
+        let text = message.filter(|m| !m.trim().is_empty()).ok_or("empty message")?;
+        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "user".into(), text: text.into(), ts: started });
+    }
     progress(app, jobs, id, "Fetching PR metadata");
     let detail = github::pr_detail(repo, number)?;
     let url = detail.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string();
@@ -235,7 +262,14 @@ fn run(
         Some(clone) => {
             progress(app, jobs, id, &format!("Checking out PR head from {}", clone.display()));
             let wt = store::worktree_dir(data_dir, repo, number);
-            match repos::prepare_worktree(&clone, &wt, number, &base) {
+            // Chat keeps working in the existing checkout: a fresh checkout would throw
+            // away edits made earlier in the conversation.
+            let prepared = if kind == "chat" && wt.join(".git").exists() {
+                Ok(())
+            } else {
+                repos::prepare_worktree(&clone, &wt, number, &base)
+            };
+            match prepared {
                 Ok(()) => {
                     crate::cleanup::touch(&wt);
                     wt
@@ -259,6 +293,12 @@ fn run(
             store::pr_dir(data_dir, repo, number)
         }
     };
+    let resume = if kind == "chat" { store::resumable(data_dir, repo, number) } else { None };
+    // A session can only be resumed from the directory it ran in.
+    let cwd = match &resume {
+        Some((_, dir)) if PathBuf::from(dir).exists() => PathBuf::from(dir),
+        _ => cwd,
+    };
     std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
 
     let claude = claude_bin(settings)?;
@@ -272,6 +312,17 @@ fn run(
             .replace("{number}", &number.to_string())
             .replace("{repo}", repo);
         args.extend(["-p".into(), prompt, "--append-system-prompt".into(), HEADLESS_NOTE.into()]);
+        model = settings.review_model.clone();
+    } else if kind == "chat" {
+        let text = message.unwrap_or_default();
+        let prompt = match &resume {
+            Some(_) => text.to_string(),
+            None => fresh_chat_prompt(&url, store::load(data_dir, repo, number).review.as_deref(), text),
+        };
+        args.extend(["-p".into(), prompt, "--append-system-prompt".into(), chat_note(&url)]);
+        if let Some((sid, _)) = &resume {
+            args.extend(["--resume".into(), sid.clone()]);
+        }
         model = settings.review_model.clone();
     } else {
         let report = store::load(data_dir, repo, number).review;
@@ -372,12 +423,21 @@ fn run(
         lines: Some(lines),
         files: Some(files),
         model: Some(model.clone()),
+        session_id: res.get("session_id").and_then(|v| v.as_str()).map(String::from),
+        cwd: Some(cwd.to_string_lossy().to_string()),
     };
     let text = res.get("result").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     if is_error {
         return Err(format!("claude reported an error: {text}"));
     }
 
+    if kind == "chat" {
+        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "assistant".into(), text, ts: now_ms() });
+        store::write(data_dir, repo, number, "chat.meta.json", &serde_json::to_string(&meta).unwrap())?;
+        finish(app, jobs, id, "done", None);
+        let _ = app.notification().builder().title(format!("Claude replied · {repo}#{number}")).body(title).show();
+        return Ok(());
+    }
     if kind == "review" {
         store::write(data_dir, repo, number, "review.md", &text)?;
         store::write(data_dir, repo, number, "review.meta.json", &serde_json::to_string(&meta).unwrap())?;

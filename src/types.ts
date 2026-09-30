@@ -125,7 +125,7 @@ export interface PrState {
   drafts: Draft[];
 }
 
-export type JobKind = "review" | "insights";
+export type JobKind = "review" | "insights" | "chat";
 
 export interface JobInfo {
   id: string;
@@ -158,4 +158,18 @@ export interface PrDetail {
   labels: { name: string; color: string }[];
   statusCheckRollup: { name?: string; context?: string; conclusion?: string; state?: string; status?: string; detailsUrl?: string; targetUrl?: string }[];
   reviewDecision?: string;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "error";
+  text: string;
+  ts: number;
+}
+
+export interface IndexEntry {
+  reviewHead?: string | null;
+  verdict?: string | null;
+  insightsHead?: string | null;
+  drafts: number;
+  chat: number;
 }

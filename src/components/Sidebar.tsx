@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { timeAgo } from "../api";
 import { useJobs } from "../jobs";
-import type { Category, Pr, Snapshot } from "../types";
+import { useEffect } from "react";
+import { api } from "../api";
+import type { Category, IndexEntry, Pr, Snapshot } from "../types";
 
 export const SECTIONS: { id: Category; label: string }[] = [
   { id: "reviewRequested", label: "Review requested" },
@@ -24,6 +26,33 @@ const APPROVAL_LABEL: Record<Approval, string> = {
   changes: "✕ Changes requested",
   waiting: "Awaiting review",
 };
+
+/** Compact label for a pr-review verdict heading like "✅ Approve — reason". */
+function verdictChip(v: string): { text: string; tone: string } {
+  if (/approve/i.test(v)) return { text: "✓ Reviewed", tone: "ok" };
+  if (/change before merge|changes/i.test(v)) return { text: "🛠 Changes", tone: "bad" };
+  if (/decision/i.test(v)) return { text: "🤔 Decide", tone: "warn" };
+  return { text: "✓ Reviewed", tone: "ok" };
+}
+
+function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
+  if (!e) return null;
+  const chip = e.verdict ? verdictChip(e.verdict) : null;
+  const stale = !!e.reviewHead && e.reviewHead !== p.headSha;
+  if (!chip && !e.insightsHead && !e.drafts && !e.chat) return null;
+  return (
+    <div className="pr-flags">
+      {chip && (
+        <span className={`flag tone-${stale ? "muted" : chip.tone}`} title={`pr-review: ${e.verdict}${stale ? " (new commits since)" : ""}`}>
+          {chip.text}{stale && " ↻"}
+        </span>
+      )}
+      {e.insightsHead && <span className="flag" title={e.insightsHead === p.headSha ? "Explained" : "Explained (new commits since)"}>✦</span>}
+      {e.drafts > 0 && <span className="flag" title={`${e.drafts} private notes`}>✎ {e.drafts}</span>}
+      {e.chat > 0 && <span className="flag" title="Claude conversation">💬</span>}
+    </div>
+  );
+}
 
 /** Each PR appears once, under its most urgent section. */
 export function sectionOf(pr: Pr): Category {
@@ -50,7 +79,11 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
   snap: Snapshot; selected?: string; onSelect: (k: string) => void; onSettings: () => void; onRefresh: () => void;
   filter: string; setFilter: (s: string) => void;
 }) {
-  const { jobs } = useJobs();
+  const { jobs, finishedTick } = useJobs();
+  const [index, setIndex] = useState<Record<string, IndexEntry>>({});
+  useEffect(() => {
+    api.index().then(setIndex).catch(() => {});
+  }, [finishedTick, snap.fetchedAt, selected]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const f = filter.toLowerCase();
   const match = (p: Pr) =>
@@ -100,6 +133,7 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
                           {(p.ci === "FAILURE" || p.ci === "ERROR") && <span className="approval-changes"> · CI failing</span>}
                         </span>
                       )}
+                      <Flags p={p} e={index[p.key]} />
                       <div className="pr-item-sub">
                         <span>{p.repo.split("/")[1]}#{p.number}</span>
                         <span>· {p.author}</span>

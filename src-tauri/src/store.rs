@@ -27,6 +27,11 @@ pub struct RunMeta {
     pub files: Option<u64>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The claude session and the directory it ran in, so it can be resumed.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -83,4 +88,71 @@ pub fn history(data: &Path) -> Vec<Value> {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    /// user | assistant | error
+    pub role: String,
+    pub text: String,
+    pub ts: u64,
+}
+
+pub fn chat(data: &Path, repo: &str, number: u64) -> Vec<ChatMessage> {
+    read_json(pr_dir(data, repo, number).join("chat.json")).unwrap_or_default()
+}
+
+pub fn push_chat(data: &Path, repo: &str, number: u64, msg: ChatMessage) {
+    let mut all = chat(data, repo, number);
+    all.push(msg);
+    let _ = write(data, repo, number, "chat.json", &serde_json::to_string_pretty(&all).unwrap_or_default());
+}
+
+/// The conversation to continue: the chat's own, else the pr-review run's, else Explain's.
+pub fn resumable(data: &Path, repo: &str, number: u64) -> Option<(String, String)> {
+    let dir = pr_dir(data, repo, number);
+    ["chat.meta.json", "review.meta.json", "insights.meta.json"].iter().find_map(|f| {
+        let m: RunMeta = read_json(dir.join(f))?;
+        Some((m.session_id?, m.cwd?))
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    pub review_head: Option<String>,
+    /// First heading of the report, e.g. "✅ Approve — …".
+    pub verdict: Option<String>,
+    pub insights_head: Option<String>,
+    pub drafts: usize,
+    pub chat: usize,
+}
+
+/// Per-PR summary of what has been done locally, keyed `owner/repo#n`.
+pub fn index(data: &Path) -> std::collections::HashMap<String, IndexEntry> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(rd) = std::fs::read_dir(data.join("prs")) else { return out };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some((repo_part, num)) = name.rsplit_once('-') else { continue };
+        let Some((owner, repo)) = repo_part.split_once("__") else { continue };
+        let Ok(number) = num.parse::<u64>() else { continue };
+        let repo = format!("{owner}/{repo}");
+        let st = load(data, &repo, number);
+        let verdict = st.review.as_deref().and_then(|r| {
+            r.lines().find(|l| l.trim_start().starts_with('#')).map(|l| l.trim_start_matches('#').trim().to_string())
+        });
+        out.insert(
+            format!("{repo}#{number}"),
+            IndexEntry {
+                review_head: st.review_meta.map(|m| m.head_sha),
+                verdict,
+                insights_head: st.insights_meta.map(|m| m.head_sha),
+                drafts: st.drafts.as_array().map(|a| a.len()).unwrap_or(0),
+                chat: chat(data, &repo, number).len(),
+            },
+        );
+    }
+    out
 }

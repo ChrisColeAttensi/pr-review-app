@@ -10,16 +10,18 @@ import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
 import { ReviewButton, ReviewDialog } from "./ReviewDialog";
 import { SlackPrompt, type SlackReason } from "./SlackPrompt";
+import { ChatTab } from "./ChatTab";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 
-type Tab = "overview" | "walkthrough" | "files" | "review" | "notes";
+type Tab = "overview" | "walkthrough" | "files" | "review" | "notes" | "claude";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "walkthrough", label: "Walkthrough" },
   { id: "files", label: "Files" },
   { id: "review", label: "pr-review" },
   { id: "notes", label: "My notes" },
+  { id: "claude", label: "Claude" },
 ];
 
 const norm = (p: string) => p.replace(/^(\.\/|a\/|b\/)/, "");
@@ -199,6 +201,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
               {t.id === "review" && running("review") && <span className="spinner" />}
               {t.id === "review" && !running("review") && state.review && <span className="dot ok" />}
               {t.id === "notes" && state.drafts.length > 0 && <span className="count">{state.drafts.length}</span>}
+              {t.id === "claude" && jobs.latest(pr.key, "chat")?.status === "running" && <span className="spinner" />}
               {t.id === "files" && concerns > 0 && <span className="count warn">{concerns}</span>}
             </button>
           ))}
@@ -299,6 +302,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
           </div>
         )}
 
+        {tab === "claude" && <ChatTab pr={pr} state={state} />}
         {tab === "notes" && <NotesTab pr={pr} drafts={state.drafts} onAdd={onAddDraft} onDelete={onDeleteDraft} onEdit={onEditDraft} />}
       </div>
     </div>

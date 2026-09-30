@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { HistoryRun } from "./estimate";
 import type { MergeInfo } from "./components/Merge";
-import type { JobInfo, JobKind, PrDetail, PrState, Settings, Snapshot, Draft } from "./types";
+import type { ChatMessage, IndexEntry, JobInfo, JobKind, PrDetail, PrState, Settings, Snapshot, Draft } from "./types";
 
 export interface SlackUser {
   userId: string;
@@ -21,8 +21,12 @@ export const api = {
   state: (repo: string, number: number) => invoke<PrState>("pr_state", { repo, number }),
   saveDrafts: (repo: string, number: number, drafts: Draft[]) =>
     invoke<void>("save_drafts", { repo, number, drafts }),
-  startJob: (repo: string, number: number, kind: JobKind) =>
-    invoke<JobInfo>("start_job", { repo, number, kind }),
+  startJob: (repo: string, number: number, kind: JobKind, message?: string) =>
+    invoke<JobInfo>("start_job", { repo, number, kind, message: message ?? null }),
+  chat: (repo: string, number: number) => invoke<ChatMessage[]>("pr_chat", { repo, number }),
+  index: () => invoke<Record<string, IndexEntry>>("pr_index"),
+  handoff: (repo: string, number: number, target: "desktop" | "terminal", url: string) =>
+    invoke<void>("handoff", { repo, number, target, url }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   listJobs: () => invoke<JobInfo[]>("list_jobs"),
   jobLines: (id: string) => invoke<string[]>("job_lines", { id }),

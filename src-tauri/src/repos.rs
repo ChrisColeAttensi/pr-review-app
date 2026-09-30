@@ -78,6 +78,11 @@ pub fn resolve(settings: &Settings, repo: &str) -> Option<PathBuf> {
 pub fn prepare_worktree(clone: &Path, wt: &Path, number: u64, base: &str) -> Result<(), String> {
     let refspec = format!("pull/{number}/head");
     if wt.join(".git").exists() {
+        // Edits from a chat would be lost by the forced checkout: stash them, recoverably.
+        let dirty = shell::run("git", &["status", "--porcelain"], Some(wt)).map(|s| !s.trim().is_empty()).unwrap_or(false);
+        if dirty {
+            shell::run("git", &["stash", "push", "--include-untracked", "--quiet", "-m", "pr-review-app: before re-checkout"], Some(wt))?;
+        }
         shell::run("git", &["fetch", "--quiet", "origin", &refspec], Some(wt))?;
         shell::run("git", &["checkout", "--quiet", "--detach", "--force", "FETCH_HEAD"], Some(wt))?;
     } else {

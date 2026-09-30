@@ -130,7 +130,7 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
     }
     if s.auto_insights {
         for pr in new_requests {
-            let _ = jobs::start(app.clone(), pr.repo.clone(), pr.number, "insights".into());
+            let _ = jobs::start(app.clone(), pr.repo.clone(), pr.number, "insights".into(), None);
         }
     }
 }
@@ -361,8 +361,8 @@ fn save_drafts(state: tauri::State<AppState>, repo: String, number: u64, drafts:
 }
 
 #[tauri::command]
-fn start_job(app: AppHandle, repo: String, number: u64, kind: String) -> Result<jobs::JobInfo, String> {
-    jobs::start(app, repo, number, kind)
+fn start_job(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>) -> Result<jobs::JobInfo, String> {
+    jobs::start(app, repo, number, kind, message)
 }
 
 #[tauri::command]
@@ -489,6 +489,57 @@ fn slack_forget(state: tauri::State<AppState>, login: String) {
 }
 
 #[tauri::command]
+fn pr_chat(state: tauri::State<AppState>, repo: String, number: u64) -> Vec<store::ChatMessage> {
+    store::chat(&state.data_dir, &repo, number)
+}
+
+#[tauri::command]
+fn pr_index(state: tauri::State<AppState>) -> HashMap<String, store::IndexEntry> {
+    store::index(&state.data_dir)
+}
+
+/// Continue this PR's Claude conversation outside the app.
+#[tauri::command]
+fn handoff(app: AppHandle, repo: String, number: u64, target: String, url: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let session = store::resumable(&state.data_dir, &repo, number);
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    match target.as_str() {
+        "desktop" => {
+            let link = match &session {
+                // Claude Desktop imports the CLI session into its Code tab.
+                Some((sid, _)) => format!("claude://resume?session={sid}"),
+                None => {
+                    let s = state.settings.lock().unwrap().clone();
+                    let folder = repos::resolve(&s, &repo).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+                    let q = format!("Let's review {url}. Start with `gh pr view {url}` and `gh pr diff {url}`.");
+                    let enc = |v: &str| v.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>();
+                    let mut l = format!("claude://code/new?q={}", enc(&q));
+                    if !folder.is_empty() {
+                        l.push_str(&format!("&folder={}", enc(&folder)));
+                    }
+                    l
+                }
+            };
+            shell::run("open", &[&link], None).map(|_| ())
+        }
+        "terminal" => {
+            let cmd = match &session {
+                Some((sid, cwd)) => format!("cd {} && claude --resume {}", quote(cwd), quote(sid)),
+                None => {
+                    let s = state.settings.lock().unwrap().clone();
+                    let dir = repos::resolve(&s, &repo).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "~".into());
+                    format!("cd {} && claude {}", quote(&dir), quote(&format!("Let's review {url}")))
+                }
+            };
+            let script = format!("tell application \"Terminal\"\n activate\n do script {}\nend tell", serde_json::to_string(&cmd).unwrap());
+            shell::run("osascript", &["-e", &script], None).map(|_| ())
+        }
+        t => Err(format!("unknown handoff target {t}")),
+    }
+}
+
+#[tauri::command]
 fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
@@ -603,6 +654,9 @@ pub fn run() {
             slack_lookup,
             slack_send,
             slack_forget,
+            pr_chat,
+            pr_index,
+            handoff,
             slack_test,
             test_notification
         ])

@@ -106,7 +106,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="row">
               <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
               <span className="spacer" />
-              <button onClick={() => { api.testNotification(); setNotifyMsg("Sent. Nothing showed up? Check System Settings → Notifications → PR Review."); }}>Send test notification</button>
+              <button onClick={() => { api.testNotification(); setNotifyMsg("Arrives in 5 seconds: switch to another app now. macOS only shows banners when PR Review is in the background. If it lands only in Notification Center, set PR Review to Banners or Alerts in System Settings → Notifications."); }}>Send test notification</button>
             </div>
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Only requests addressed to me directly (ignore team requests)</label>

@@ -475,7 +475,12 @@ async fn slack_test(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn test_notification(app: AppHandle) {
-    notify(&app, "Review requested · Attensi/example#123", "This is a test notification from PR Review.");
+    // macOS only shows banners for apps in the background, and the user just clicked
+    // this inside the app: give them time to switch away.
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        notify(&app, "Review requested · Attensi/example#123", "This is a test notification from PR Review.");
+    });
 }
 
 #[tauri::command]

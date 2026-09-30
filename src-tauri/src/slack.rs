@@ -8,8 +8,6 @@ use crate::shell;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -46,43 +44,53 @@ fn valid_user_id(id: &str) -> bool {
     id.len() >= 8 && id.starts_with(['U', 'W']) && id.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
-/// MCP tool names depend on how the connector is registered, so read them from the
-/// session's init event, then kill the process before it makes a model call.
+/// Claude Code names MCP tools `mcp__<server>__<tool>`, with the server name's
+/// punctuation and spaces turned into `_` ("claude.ai Slack" → "claude_ai_Slack").
+fn normalize(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
+}
+
+fn tools_for(server: &str) -> Tools {
+    let n = normalize(server);
+    Tools { search: format!("mcp__{n}__slack_search_users"), send: format!("mcp__{n}__slack_send_message") }
+}
+
+/// Find a connected Slack MCP server via `claude mcp list`. Reading tool names from a
+/// session's init event is unreliable: claude.ai connectors can still be connecting.
 fn tools(settings: &Settings) -> Result<Tools, String> {
     if let Some(t) = TOOLS.lock().unwrap().clone() {
         return Ok(t);
     }
     let claude = claude_bin(settings)?;
-    let mut child = claude_command(&claude)
-        .args(["-p", ".", "--output-format", "stream-json", "--verbose", "--model", "haiku",
-               "--permission-mode", "dontAsk", "--no-session-persistence"])
+    let out = claude_command(&claude)
+        .args(["mcp", "list"])
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("failed to start claude: {e}"))?;
-    let mut first = String::new();
-    if let Some(out) = child.stdout.take() {
-        let _ = BufReader::new(out).read_line(&mut first);
-    }
-    unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGTERM);
-    }
-    let _ = child.wait();
-
-    let init: Value = serde_json::from_str(&first).map_err(|_| "claude did not start a session (is the CLI logged in?)")?;
-    let names: Vec<String> = init
-        .get("tools")
-        .and_then(|t| t.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let find = |suffix: &str| names.iter().find(|n| n.starts_with("mcp__") && n.ends_with(suffix)).cloned();
-    let t = Tools {
-        search: find("__slack_search_users").ok_or(NO_CONNECTOR)?,
-        send: find("__slack_send_message").ok_or(NO_CONNECTOR)?,
+        .output()
+        .map_err(|e| format!("failed to run claude mcp list: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Lines look like `claude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected`.
+    let mut servers: Vec<(String, bool)> = text
+        .lines()
+        .filter(|l| l.contains("mcp.slack.com"))
+        .filter_map(|l| {
+            let name = l.split(": http").next()?.trim().to_string();
+            Some((name, l.contains("Connected") && !l.contains("Needs")))
+        })
+        .collect();
+    // Prefer the claude.ai connector, then any other connected Slack server.
+    servers.sort_by_key(|(n, _)| !n.starts_with("claude.ai"));
+    let Some((name, _)) = servers.iter().find(|(_, ok)| *ok) else {
+        return Err(if servers.is_empty() {
+            NO_CONNECTOR.to_string()
+        } else {
+            format!(
+                "Slack is set up for the claude CLI but not connected ({}). Reconnect it at claude.ai → Settings → Connectors.",
+                servers.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        });
     };
+    let t = tools_for(name);
     *TOOLS.lock().unwrap() = Some(t.clone());
     Ok(t)
 }
@@ -90,8 +98,7 @@ fn tools(settings: &Settings) -> Result<Tools, String> {
 const NO_CONNECTOR: &str =
     "The claude CLI has no Slack connector. Connect Slack at claude.ai → Settings → Connectors, then check `claude mcp list`.";
 
-/// One Haiku turn allowed to call only `allowed`, returning schema-shaped JSON.
-fn run(settings: &Settings, prompt: &str, allowed: &str, schema: Value) -> Result<Value, String> {
+fn run_once(settings: &Settings, prompt: &str, allowed: &str, schema: &Value) -> Result<Value, String> {
     let claude = claude_bin(settings)?;
     let out = claude_command(&claude)
         .args([
@@ -107,12 +114,47 @@ fn run(settings: &Settings, prompt: &str, allowed: &str, schema: Value) -> Resul
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("failed to start claude: {e}"))?;
-    let v: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| format!("claude returned no result. {}", String::from_utf8_lossy(&out.stderr).trim()))?;
-    if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
-        return Err(v.get("result").and_then(|r| r.as_str()).unwrap_or("claude reported an error").to_string());
+    serde_json::from_slice(&out.stdout)
+        .map_err(|_| format!("claude returned no result. {}", String::from_utf8_lossy(&out.stderr).trim()))
+}
+
+/// One Haiku turn allowed to call only `allowed`, returning schema-shaped JSON.
+/// If the tool name was guessed wrong, the denied call names the real one: learn it
+/// and retry once.
+fn run(settings: &Settings, prompt: &str, allowed: &str, schema: Value) -> Result<Value, String> {
+    let suffix = allowed.rsplit("__").next().unwrap_or(allowed).to_string();
+    let mut allowed = allowed.to_string();
+    let mut prompt = prompt.to_string();
+    for attempt in 0..2 {
+        let v = run_once(settings, &prompt, &allowed, &schema)?;
+        let denied: Vec<String> = v
+            .get("permission_denials")
+            .and_then(|d| d.as_array())
+            .map(|a| a.iter().filter_map(|x| x.get("tool_name")?.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if let Some(real) = denied.iter().find(|n| n.starts_with("mcp__") && n.ends_with(&format!("__{suffix}")) && **n != allowed) {
+            if attempt == 0 {
+                let server = real.trim_start_matches("mcp__").rsplit_once("__").map(|(s, _)| s.to_string()).unwrap_or_default();
+                let t = Tools {
+                    search: format!("mcp__{server}__slack_search_users"),
+                    send: format!("mcp__{server}__slack_send_message"),
+                };
+                *TOOLS.lock().unwrap() = Some(t);
+                prompt = prompt.replace(&allowed, real);
+                allowed = real.clone();
+                continue;
+            }
+        }
+        if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
+            return Err(v.get("result").and_then(|r| r.as_str()).unwrap_or("claude reported an error").to_string());
+        }
+        return v
+            .get("structured_output")
+            .cloned()
+            .filter(|s| s.is_object())
+            .ok_or_else(|| "claude returned no structured output".into());
     }
-    v.get("structured_output").cloned().filter(|s| s.is_object()).ok_or_else(|| "claude returned no structured output".into())
+    Err("could not reach the Slack tools".into())
 }
 
 fn cache_path(data: &Path) -> std::path::PathBuf {
@@ -238,5 +280,20 @@ pub fn forget(data: &Path, login: &str) {
     let mut cache = load_cache(data);
     if cache.remove(login).is_some() {
         let _ = std::fs::write(cache_path(data), serde_json::to_string_pretty(&cache).unwrap_or_default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_tools_like_claude_code() {
+        let t = tools_for("claude.ai Slack");
+        assert_eq!(t.send, "mcp__claude_ai_Slack__slack_send_message");
+        assert_eq!(tools_for("plugin:engineering:slack").search, "mcp__plugin_engineering_slack__slack_search_users");
+        assert!(valid_user_id("U01045HJK8X"));
+        assert!(!valid_user_id("C123"));
+        assert!(!valid_user_id("u01045hjk8x"));
     }
 }

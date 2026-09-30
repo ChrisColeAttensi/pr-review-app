@@ -13,6 +13,17 @@ Menu-bar app that watches GitHub PRs, notifies you, and gives you a review UI ba
 - `claude` CLI logged in (`claude` then `/login`)
 - A local clone of each repo you want pr-review to run on, under a folder listed in Settings → Repositories (default `~/Developer`)
 
+## Install (Homebrew, private)
+
+```bash
+brew tap chriscoleattensi/tap https://github.com/ChrisColeAttensi/homebrew-tap
+brew install --cask pr-review
+```
+
+Update with `brew update && brew upgrade --cask pr-review`. The cask downloads the private release asset using `HOMEBREW_GITHUB_API_TOKEN`, or your `gh` login when that isn't set.
+
+Release a new version with `scripts/release.sh 0.2.0`. It bumps the version, builds, publishes a GitHub release, and updates the cask in the tap.
+
 ## Run
 
 ```bash

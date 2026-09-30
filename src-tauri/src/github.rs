@@ -17,6 +17,18 @@ query($q: String!) {
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         reviews(last: 30) { nodes { author { login } state submittedAt commit { oid } } }
+        latestReviews(first: 20) { nodes { author { login avatarUrl } state } }
+        reviewRequests(first: 20) {
+          nodes {
+            requestedReviewer {
+              __typename
+              ... on User { login avatarUrl }
+              ... on Team { name slug organization { login } }
+              ... on Bot { login avatarUrl }
+              ... on Mannequin { login avatarUrl }
+            }
+          }
+        }
       }
     }
   }
@@ -29,6 +41,24 @@ pub struct Review {
     pub state: String,
     pub submitted_at: Option<String>,
     pub commit: Option<String>,
+}
+
+/// Someone asked to review who has not answered yet: a person, or a whole team.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestedReviewer {
+    pub name: String,
+    pub is_team: bool,
+    pub avatar: String,
+}
+
+/// Each reviewer's most recent verdict.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestReview {
+    pub author: String,
+    pub avatar: String,
+    pub state: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,6 +83,8 @@ pub struct Pr {
     pub review_decision: Option<String>,
     pub ci: Option<String>,
     pub reviews: Vec<Review>,
+    pub requested_reviewers: Vec<RequestedReviewer>,
+    pub latest_reviews: Vec<LatestReview>,
     /// reviewRequested | reReview | watched | mine
     pub categories: Vec<String>,
     /// I reviewed an older commit than the current head.
@@ -96,6 +128,26 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
                 .collect()
         })
         .unwrap_or_default();
+    let nodes = |ptr: &str| n.pointer(ptr).and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let requested_reviewers = nodes("/reviewRequests/nodes")
+        .iter()
+        .filter_map(|r| {
+            let rr = r.get("requestedReviewer")?;
+            if rr.get("__typename")?.as_str()? == "Team" {
+                Some(RequestedReviewer {
+                    name: format!("{}/{}", s(rr, "/organization/login"), s(rr, "/slug")),
+                    is_team: true,
+                    avatar: String::new(),
+                })
+            } else {
+                Some(RequestedReviewer { name: s(rr, "/login"), is_team: false, avatar: s(rr, "/avatarUrl") })
+            }
+        })
+        .collect();
+    let latest_reviews = nodes("/latestReviews/nodes")
+        .iter()
+        .map(|r| LatestReview { author: s(r, "/author/login"), avatar: s(r, "/author/avatarUrl"), state: s(r, "/state") })
+        .collect();
     let head_sha = s(n, "/headRefOid");
     let my_last = reviews.iter().rev().find(|r| r.author == me && r.state != "PENDING");
     let needs_re_review = my_last
@@ -125,6 +177,8 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
             .and_then(|x| x.as_str())
             .map(String::from),
         reviews,
+        requested_reviewers,
+        latest_reviews,
         categories: vec![],
         needs_re_review,
     })

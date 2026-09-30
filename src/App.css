@@ -383,3 +383,24 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 /* ---------- estimates ---------- */
 .est { font-size: 11px; font-weight: 400; opacity: 0.75; margin-left: 6px; font-variant-numeric: tabular-nums; }
 .est.guess::after { content: "?"; }
+
+/* ---------- reviewers ---------- */
+.avatar.team { display: inline-grid; place-items: center; background: var(--bg-sunk); border: 1px solid var(--border); }
+.rv-stack { display: inline-flex; align-items: center; gap: 2px; margin: 0 4px; }
+.rv-chip { position: relative; display: inline-flex; }
+.rv-badge {
+  position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%;
+  font-size: 7px; line-height: 11px; text-align: center; color: #fff; background: var(--fg-muted);
+  border: 1px solid var(--bg);
+}
+.rv-APPROVED .rv-badge { background: var(--add); }
+.rv-CHANGES_REQUESTED .rv-badge { background: var(--del); }
+.rv-REQUESTED .rv-badge { background: var(--warn); }
+.rv-COMMENTED .rv-badge { font-size: 6px; background: var(--bg-card); }
+.rv-list { list-style: none; margin: 0; padding: 0; }
+.rv-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.rv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-state { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.rv-state.rv-APPROVED { color: var(--add); }
+.rv-state.rv-CHANGES_REQUESTED { color: var(--del); }
+.rv-state.rv-REQUESTED { color: var(--warn); }

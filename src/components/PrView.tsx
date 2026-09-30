@@ -6,6 +6,7 @@ import { useJobs } from "../jobs";
 import { DiffFile, filePath } from "./DiffFile";
 import { JobLog } from "./JobLog";
 import { Markdown } from "./Markdown";
+import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 
@@ -35,7 +36,7 @@ function useViewType() {
   return [v, set] as const;
 }
 
-export function PrView({ pr, tab, setTab }: { pr: Pr; tab: Tab; setTab: (t: Tab) => void }) {
+export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; setTab: (t: Tab) => void }) {
   const [detail, setDetail] = useState<PrDetail>();
   const [files, setFiles] = useState<FileData[]>();
   const [state, setState] = useState<PrState>({ drafts: [] });
@@ -169,6 +170,7 @@ export function PrView({ pr, tab, setTab }: { pr: Pr; tab: Tab; setTab: (t: Tab)
           <span className="add">+{pr.additions}</span>
           <span className="del">−{pr.deletions}</span>
           <span className="muted">{pr.changedFiles} files · updated {timeAgo(pr.updatedAt)}</span>
+          <ReviewerStack pr={pr} me={me} />
           {pr.isDraft && <span className="badge">Draft</span>}
           {pr.ci && <span className={`badge ci-${pr.ci.toLowerCase()}`}>CI {pr.ci.toLowerCase()}</span>}
           {pr.reviewDecision && <span className="badge">{pr.reviewDecision.replace("_", " ").toLowerCase()}</span>}
@@ -207,7 +209,7 @@ export function PrView({ pr, tab, setTab }: { pr: Pr; tab: Tab; setTab: (t: Tab)
 
       <div className="pr-body">
         {tab === "overview" && (
-          <Overview pr={pr} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
+          <Overview pr={pr} me={me} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
             onExplain={() => { setTab("walkthrough"); jobs.start(pr.repo, pr.number, "insights"); }} explaining={running("insights")} goto={setTab} />
         )}
 
@@ -271,8 +273,8 @@ export function PrView({ pr, tab, setTab }: { pr: Pr; tab: Tab; setTab: (t: Tab)
   );
 }
 
-function Overview({ pr, detail, insights, state, stale, onExplain, explaining, goto }: {
-  pr: Pr; detail?: PrDetail; insights?: Insights | null; state: PrState; stale: boolean;
+function Overview({ pr, me, detail, insights, state, stale, onExplain, explaining, goto }: {
+  pr: Pr; me: string; detail?: PrDetail; insights?: Insights | null; state: PrState; stale: boolean;
   onExplain: () => void; explaining: boolean; goto: (t: Tab) => void;
 }) {
   const checks = detail?.statusCheckRollup ?? [];
@@ -359,15 +361,7 @@ function Overview({ pr, detail, insights, state, stale, onExplain, explaining, g
             </ul>
           </div>
         )}
-        <div className="card">
-          <h3>Reviews</h3>
-          {pr.reviews.length === 0 && <p className="muted small">None yet.</p>}
-          <ul className="commits">
-            {pr.reviews.filter((r) => r.state !== "COMMENTED" || true).slice(-8).map((r, i) => (
-              <li key={i}><b>{r.author}</b> <span className="muted">{r.state.toLowerCase().replace("_", " ")}</span></li>
-            ))}
-          </ul>
-        </div>
+        <ReviewerList pr={pr} me={me} />
       </div>
     </div>
   );

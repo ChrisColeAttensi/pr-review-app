@@ -27,6 +27,8 @@ export interface Pr {
   reviewDecision?: string | null;
   ci?: string | null;
   reviews: Review[];
+  requestedReviewers?: { name: string; isTeam: boolean; avatar: string }[];
+  latestReviews?: { author: string; avatar: string; state: string }[];
   categories: Category[];
   needsReReview: boolean;
 }

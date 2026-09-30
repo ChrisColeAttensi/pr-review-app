@@ -67,7 +67,7 @@ export default function App() {
         />
         <main className="main">
           {pr ? (
-            <PrView key={pr.key} pr={pr} tab={tab} setTab={setTab} />
+            <PrView key={pr.key} pr={pr} me={snap.me} tab={tab} setTab={setTab} />
           ) : (
             <div className="empty" data-tauri-drag-region>
               <p className="muted">{snap.loading ? "Fetching pull requests…" : "Select a pull request."}</p>

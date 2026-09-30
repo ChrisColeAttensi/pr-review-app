@@ -27,6 +27,10 @@ bun run tauri build --bundles app   # → src-tauri/target/release/bundle/macos/
 
 Settings → General → **Launch at login** registers a LaunchAgent; login launches start hidden in the menu bar (`--hidden`). Enable it from the built `.app`, not `tauri dev`, or it will point at the debug binary.
 
+## Worktree cleanup
+
+Each run checks the PR out into `worktrees/<owner>__<repo>-<n>`. About once an hour the app removes worktrees whose PR is merged or closed, and ones unused for longer than the retention setting (default 7 days; "Never" keeps them until the PR closes). Worktrees with a running job are skipped. Reports, walkthroughs and notes under `prs/` are kept. Settings → Review worktrees shows disk use and has **Clean up now** and **Remove all**.
+
 ## Keys
 
 `j`/`k` next/prev PR · `/` filter · `⌘1–5` tabs · `⌘R` refresh · `⌘,` settings

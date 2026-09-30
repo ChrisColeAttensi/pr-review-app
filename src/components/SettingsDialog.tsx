@@ -19,14 +19,33 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string>();
   const [autostart, setAutostart] = useState<boolean>();
+  const [usage, setUsage] = useState<{ count: number; bytes: number }>();
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanMsg, setCleanMsg] = useState<string>();
 
   useEffect(() => {
     api.settings().then(setS);
     api.discoverRepos().then(setFound);
+    api.worktreeUsage().then(setUsage).catch(() => {});
     api.getAutostart().then(setAutostart).catch(() => setAutostart(false));
   }, []);
   if (!s) return null;
   const set = (patch: Partial<Settings>) => setS({ ...s, ...patch });
+
+  const clean = async (everything: boolean) => {
+    setCleaning(true);
+    setCleanMsg(undefined);
+    try {
+      const r = await api.cleanupWorktrees(everything);
+      setCleanMsg(r.removed.length ? `Removed ${r.removed.length}: ${r.removed.join(", ")}` : "Nothing to remove.");
+      setUsage(await api.worktreeUsage());
+    } catch (e) {
+      setCleanMsg(String(e));
+    } finally {
+      setCleaning(false);
+    }
+  };
+  const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
 
   const save = async () => {
     setSaving(true);
@@ -124,6 +143,28 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   onClick={() => { set({ repoPaths: { ...s.repoPaths, [overrideRepo.trim().toLowerCase()]: overridePath.trim() } }); setOverrideRepo(""); setOverridePath(""); }}>Add</button>
               </div>
             </div>
+          </section>
+
+          <section>
+            <h3>Review worktrees</h3>
+            <p className="muted small">
+              Each review checks the PR out into its own worktree. These are removed automatically once the PR is merged or
+              closed, or after they sit unused. Reports, walkthroughs and your notes are kept.
+            </p>
+            <label className="field">
+              <span>Remove unused after</span>
+              <select value={s.worktreeRetentionDays} onChange={(e) => set({ worktreeRetentionDays: Number(e.target.value) })}>
+                {[1, 3, 7, 14, 30].map((d) => <option key={d} value={d}>{d} day{d > 1 ? "s" : ""}</option>)}
+                <option value={0}>Never (only when the PR closes)</option>
+              </select>
+            </label>
+            <div className="row">
+              <span className="muted small">{usage ? `${usage.count} worktree${usage.count === 1 ? "" : "s"} · ${size(usage.bytes)}` : "Measuring…"}</span>
+              <span className="spacer" />
+              <button disabled={cleaning} onClick={() => clean(false)} title="Apply the rules above now (uses saved settings)">Clean up now</button>
+              <button className="danger" disabled={cleaning || !usage?.count} onClick={() => clean(true)} title="Remove every worktree not in use by a running job">Remove all</button>
+            </div>
+            {cleanMsg && <p className="muted small">{cleanMsg}</p>}
           </section>
 
           <section>

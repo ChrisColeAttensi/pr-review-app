@@ -61,6 +61,7 @@ export interface Settings {
   reviewModel: string;
   insightsModel: string;
   autoInsights: boolean;
+  worktreeRetentionDays: number;
 }
 
 export type AnnotationKind = "explain" | "why" | "concern" | "question" | "suggestion" | "nit";

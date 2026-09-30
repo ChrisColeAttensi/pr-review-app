@@ -95,8 +95,3 @@ pub fn prepare_worktree(clone: &Path, wt: &Path, number: u64, base: &str) -> Res
     }
     Ok(())
 }
-
-pub fn remove_worktree(clone: &Path, wt: &Path) {
-    let wt_s = wt.to_string_lossy().to_string();
-    let _ = shell::run("git", &["worktree", "remove", "--force", &wt_s], Some(clone));
-}

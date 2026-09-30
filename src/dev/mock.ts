@@ -17,7 +17,7 @@ export function installMock() {
     notifyCategories: { reviewRequested: true, reReview: true, watched: false, mine: true },
     directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
     claudePath: "", reviewCommand: "/chriscole-skills:pr-review {url}", permissionMode: "auto",
-    reviewModel: "", insightsModel: "", autoInsights: false,
+    reviewModel: "", insightsModel: "", autoInsights: false, worktreeRetentionDays: 7,
   };
 
   mockIPC(
@@ -39,6 +39,8 @@ export function installMock() {
         case "save_drafts": drafts = args.drafts; return null;
         case "list_jobs": return [];
         case "get_autostart": return false;
+        case "worktree_usage": return { count: 3, bytes: 1.4e9 };
+        case "cleanup_worktrees": return { removed: args.everything ? ["Attensi/impact#817 (removed by you)"] : [], kept: args.everything ? 0 : 3 };
         case "run_history": return [
           { kind: "insights", lines: 180, files: 5, model: "", durationMs: 95000, costUsd: 0.31, finishedAt: 1 },
           { kind: "insights", lines: 240, files: 4, model: "", durationMs: 130000, costUsd: 0.42, finishedAt: 2 },

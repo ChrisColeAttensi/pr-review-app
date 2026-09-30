@@ -46,6 +46,8 @@ pub struct Settings {
     pub insights_model: String,
     /// Run the insights pass automatically when a review is requested from me.
     pub auto_insights: bool,
+    /// Remove review worktrees unused for this many days (0 = only when the PR closes).
+    pub worktree_retention_days: u64,
 }
 
 impl Default for Settings {
@@ -65,6 +67,7 @@ impl Default for Settings {
             review_model: String::new(),
             insights_model: String::new(),
             auto_insights: false,
+            worktree_retention_days: 7,
         }
     }
 }

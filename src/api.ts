@@ -21,6 +21,9 @@ export const api = {
   history: () => invoke<HistoryRun[]>("run_history"),
   getAutostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  cleanupWorktrees: (everything: boolean) =>
+    invoke<{ removed: string[]; kept: number }>("cleanup_worktrees", { everything }),
+  worktreeUsage: () => invoke<{ count: number; bytes: number }>("worktree_usage"),
   cleanWorktree: (repo: string, number: number) => invoke<void>("clean_worktree", { repo, number }),
 };
 

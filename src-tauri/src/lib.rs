@@ -1,3 +1,4 @@
+mod cleanup;
 mod github;
 mod jobs;
 mod repos;
@@ -9,11 +10,11 @@ use github::Pr;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use settings::Settings;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent, Wry};
@@ -199,6 +200,7 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        let mut last_cleanup: Option<Instant> = None;
         loop {
             let s = state.settings.lock().unwrap().clone();
             {
@@ -225,7 +227,19 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             };
             let _ = app.emit("prs-updated", snap.clone());
             let app2 = app.clone();
-            let _ = app.run_on_main_thread(move || rebuild_tray(&app2, &snap));
+            let tray_snap = snap.clone();
+            let _ = app.run_on_main_thread(move || rebuild_tray(&app2, &tray_snap));
+
+            if !snap.loading && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
+                last_cleanup = Some(Instant::now());
+                let app2 = app.clone();
+                let open: HashSet<String> = snap.prs.iter().map(|p| p.key.clone()).collect();
+                std::thread::spawn(move || {
+                    let state = app2.state::<AppState>();
+                    let days = state.settings.lock().unwrap().worktree_retention_days;
+                    let _ = cleanup::run(&state.data_dir, days, &open, &busy_keys(&state), false);
+                });
+            }
 
             let wait = Duration::from_secs(s.poll_interval_secs.max(30));
             match rx.recv_timeout(wait) {
@@ -236,6 +250,14 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             }
         }
     });
+}
+
+fn busy_keys(state: &AppState) -> HashSet<String> {
+    state
+        .jobs
+        .lock()
+        .map(|m| m.values().filter(|j| j.info.status == "running").map(|j| j.info.pr_key.clone()).collect())
+        .unwrap_or_default()
 }
 
 // ---------- window ----------
@@ -341,12 +363,27 @@ fn job_lines(state: tauri::State<AppState>, id: String) -> Vec<String> {
 
 #[tauri::command]
 fn clean_worktree(state: tauri::State<AppState>, repo: String, number: u64) -> Result<(), String> {
-    let s = state.settings.lock().unwrap().clone();
-    let wt = store::worktree_dir(&state.data_dir, &repo, number);
-    if let Some(clone) = repos::resolve(&s, &repo) {
-        repos::remove_worktree(&clone, &wt);
-    }
+    cleanup::remove(&store::worktree_dir(&state.data_dir, &repo, number));
     Ok(())
+}
+
+#[tauri::command]
+async fn cleanup_worktrees(app: AppHandle, everything: bool) -> Result<cleanup::Report, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let days = state.settings.lock().unwrap().worktree_retention_days;
+        let open: HashSet<String> = state.snapshot.lock().unwrap().prs.iter().map(|p| p.key.clone()).collect();
+        cleanup::run(&state.data_dir, days, &open, &busy_keys(&state), everything)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn worktree_usage(app: AppHandle) -> Result<cleanup::Usage, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::usage(&app.state::<AppState>().data_dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -455,7 +492,9 @@ pub fn run() {
             hide_main,
             get_autostart,
             set_autostart,
-            run_history
+            run_history,
+            cleanup_worktrees,
+            worktree_usage
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

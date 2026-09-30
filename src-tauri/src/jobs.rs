@@ -211,7 +211,10 @@ fn run(
             progress(app, jobs, id, &format!("Checking out PR head from {}", clone.display()));
             let wt = store::worktree_dir(data_dir, repo, number);
             match repos::prepare_worktree(&clone, &wt, number, &base) {
-                Ok(()) => wt,
+                Ok(()) => {
+                    crate::cleanup::touch(&wt);
+                    wt
+                }
                 Err(e) => {
                     if kind == "review" {
                         return Err(format!("could not prepare worktree: {e}"));

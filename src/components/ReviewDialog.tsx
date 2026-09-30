@@ -21,7 +21,7 @@ export function ReviewButton({ pr, me, onClick }: { pr: Pr; me: string; onClick:
   return <button className={mine === "APPROVED" ? "reviewed-ok" : ""} onClick={onClick} title="Submit a review on GitHub">{label}</button>;
 }
 
-export function ReviewDialog({ pr, me, onClose, onDone }: { pr: Pr; me: string; onClose: () => void; onDone: (msg: string) => void }) {
+export function ReviewDialog({ pr, me, onClose, onDone }: { pr: Pr; me: string; onClose: () => void; onDone: (msg: string, event: Event) => void }) {
   const own = pr.author === me;
   const [event, setEvent] = useState<Event>(own ? "comment" : "approve");
   const [body, setBody] = useState("");
@@ -36,7 +36,7 @@ export function ReviewDialog({ pr, me, onClose, onDone }: { pr: Pr; me: string; 
     setErr(undefined);
     try {
       await api.submitReview({ repo: pr.repo, number: pr.number, event, body });
-      onDone(event === "approve" ? "Approved" : event === "request_changes" ? "Changes requested" : "Review comment posted");
+      onDone(event === "approve" ? "Approved" : event === "request_changes" ? "Changes requested" : "Review comment posted", event);
     } catch (e) {
       setErr(String(e).replace(/^.*?gh pr: /, ""));
       setBusy(false);

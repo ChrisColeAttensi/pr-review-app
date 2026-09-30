@@ -31,6 +31,10 @@ Settings → General → **Launch at login** registers a LaunchAgent; login laun
 
 Each run checks the PR out into `worktrees/<owner>__<repo>-<n>`. About once an hour the app removes worktrees whose PR is merged or closed, and ones unused for longer than the retention setting (default 7 days; "Never" keeps them until the PR closes). Worktrees with a running job are skipped. Reports, walkthroughs and notes under `prs/` are kept. Settings → Review worktrees shows disk use and has **Clean up now** and **Remove all**.
 
+## Slack
+
+After you approve or merge someone else's PR, the app offers to DM the author. It matches them by the email on their commits, and shows who it found before you send. Messages go out as you through your **claude.ai Slack connector** (check `claude mcp list`), via a tiny Haiku run that may call only the Slack tool it needs. No Slack app or admin approval is needed. Confirmed matches are remembered in `slack-users.json`. Settings → Slack has the toggles, message templates, and a self-test.
+
 ## Keys
 
 `j`/`k` next/prev PR · `/` filter · `⌘1–5` tabs · `⌘R` refresh · `⌘,` settings

@@ -440,3 +440,6 @@ label.check.override input { margin-top: 3px; }
 .review-opt input { margin-top: 3px; }
 .review-opt.disabled { opacity: 0.55; cursor: default; }
 button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--add) 45%, transparent); }
+
+.slack-who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; min-height: 22px; }
+.slack-who .spinner { margin: 0; }

@@ -67,6 +67,10 @@ export interface Settings {
   insightsModel: string;
   autoInsights: boolean;
   worktreeRetentionDays: number;
+  slackOnApprove: boolean;
+  slackOnMerge: boolean;
+  slackApproveTemplate: string;
+  slackMergeTemplate: string;
 }
 
 export type AnnotationKind = "explain" | "why" | "concern" | "question" | "suggestion" | "nit";

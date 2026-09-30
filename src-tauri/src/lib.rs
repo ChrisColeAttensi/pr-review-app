@@ -4,6 +4,7 @@ mod jobs;
 mod repos;
 mod settings;
 mod shell;
+mod slack;
 mod store;
 
 use github::Pr;
@@ -441,6 +442,43 @@ async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result
 }
 
 #[tauri::command]
+async fn slack_lookup(app: AppHandle, repo: String, number: u64, login: String) -> Result<slack::Lookup, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let s = state.settings.lock().unwrap().clone();
+        slack::lookup(&s, &state.data_dir, &repo, number, &login)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, message: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let s = state.settings.lock().unwrap().clone();
+        slack::send(&s, &state.data_dir, &login, &user, &message)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn slack_test(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<AppState>().settings.lock().unwrap().clone();
+        slack::send_test(&s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn slack_forget(state: tauri::State<AppState>, login: String) {
+    slack::forget(&state.data_dir, &login);
+}
+
+#[tauri::command]
 fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
@@ -551,7 +589,11 @@ pub fn run() {
             worktree_usage,
             merge_info,
             merge_pr,
-            submit_review
+            submit_review,
+            slack_lookup,
+            slack_send,
+            slack_forget,
+            slack_test
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

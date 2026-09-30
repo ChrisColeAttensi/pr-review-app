@@ -9,6 +9,7 @@ import { Markdown } from "./Markdown";
 import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
 import { ReviewButton, ReviewDialog } from "./ReviewDialog";
+import { SlackPrompt, type SlackReason } from "./SlackPrompt";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 
@@ -49,6 +50,13 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
   const [merging, setMerging] = useState(false);
   const [merged, setMerged] = useState<string>();
   const [reviewing, setReviewing] = useState(false);
+  const [slackFor, setSlackFor] = useState<SlackReason>();
+  // Only for other people's PRs, and only when enabled in Settings.
+  const offerSlack = (reason: SlackReason) => {
+    const s = jobs.settings;
+    if (!s || pr.author === me) return;
+    if ((reason === "approve" && s.slackOnApprove) || (reason === "merge" && s.slackOnMerge)) setSlackFor(reason);
+  };
 
   const reviewJob = jobs.latest(pr.key, "review");
   const insightsJob = jobs.latest(pr.key, "insights");
@@ -211,11 +219,14 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
       )}
       {reviewing && (
         <ReviewDialog pr={pr} me={me} onClose={() => setReviewing(false)}
-          onDone={(m) => { setReviewing(false); setMerged(m); merge.reload(); }} />
+          onDone={(m, ev) => { setReviewing(false); setMerged(m); merge.reload(); if (ev === "approve") offerSlack("approve"); }} />
       )}
       {merging && merge.info && (
         <MergeDialog pr={pr} info={merge.info} onClose={() => setMerging(false)}
-          onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); }} />
+          onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); if (m === "Merged") offerSlack("merge"); }} />
+      )}
+      {slackFor && jobs.settings && (
+        <SlackPrompt pr={pr} reason={slackFor} settings={jobs.settings} onClose={() => setSlackFor(undefined)} />
       )}
       {jobs.error && <div className="banner error">{jobs.error}</div>}
       {[insightsJob, reviewJob].map((j) => j?.status === "failed" && (

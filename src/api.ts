@@ -3,6 +3,13 @@ import type { HistoryRun } from "./estimate";
 import type { MergeInfo } from "./components/Merge";
 import type { JobInfo, JobKind, PrDetail, PrState, Settings, Snapshot, Draft } from "./types";
 
+export interface SlackUser {
+  userId: string;
+  name: string;
+  title: string;
+  email: string;
+}
+
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   refresh: () => invoke<void>("refresh"),
@@ -32,6 +39,11 @@ export const api = {
   }) => invoke<string>("merge_pr", { request }),
   submitReview: (request: { repo: string; number: number; event: "approve" | "request_changes" | "comment"; body: string }) =>
     invoke<string>("submit_review", { request }),
+  slackLookup: (repo: string, number: number, login: string) =>
+    invoke<{ user: SlackUser | null; cached: boolean; emails: string[] }>("slack_lookup", { repo, number, login }),
+  slackSend: (login: string, user: SlackUser, message: string) => invoke<string>("slack_send", { login, user, message }),
+  slackTest: () => invoke<string>("slack_test"),
+  slackForget: (login: string) => invoke<void>("slack_forget", { login }),
   cleanWorktree: (repo: string, number: number) => invoke<void>("clean_worktree", { repo, number }),
 };
 

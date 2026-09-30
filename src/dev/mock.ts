@@ -22,6 +22,9 @@ export function installMock() {
     actionableOnly: true, showDrafts: false, directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
     claudePath: "", reviewCommand: "/chriscole-skills:pr-review {url}", permissionMode: "auto",
     reviewModel: "", insightsModel: "", autoInsights: false, worktreeRetentionDays: 7,
+    slackOnApprove: true, slackOnMerge: true,
+    slackApproveTemplate: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍",
+    slackMergeTemplate: "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀",
   };
 
   mockIPC(
@@ -50,6 +53,11 @@ export function installMock() {
           pullRequest: { state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", headRefOid: "ca8b7d1f00",
             viewerCanMergeAsAdmin: false, viewerCanBypassRulesets: true, viewerCanEnableAutoMerge: true, autoMergeRequest: null },
         };
+        case "slack_lookup": await new Promise((r) => setTimeout(r, 1200));
+          return { user: { userId: "U01045HJK8X", name: "Johan Helsing", title: "Staff Unity Software Engineer", email: "johan.helsing@attensi.com" }, cached: false, emails: [] };
+        case "slack_send": await new Promise((r) => setTimeout(r, 1000)); return "https://attensi.slack.com/archives/D0/p1";
+        case "slack_forget": return null;
+        case "slack_test": return "";
         case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
         case "merge_pr": await new Promise((r) => setTimeout(r, 600)); return "";
         case "worktree_usage": return { count: 3, bytes: 1.4e9 };

@@ -49,6 +49,12 @@ pub struct Settings {
     pub insights_model: String,
     /// Run the insights pass automatically when a review is requested from me.
     pub auto_insights: bool,
+    /// Offer to DM the author on Slack after approving / merging their PR.
+    pub slack_on_approve: bool,
+    pub slack_on_merge: bool,
+    /// {first}, {name}, {title}, {url}, {repo}, {number} are filled in.
+    pub slack_approve_template: String,
+    pub slack_merge_template: String,
     /// Remove review worktrees unused for this many days (0 = only when the PR closes).
     pub worktree_retention_days: u64,
 }
@@ -73,6 +79,10 @@ impl Default for Settings {
             insights_model: String::new(),
             auto_insights: false,
             worktree_retention_days: 7,
+            slack_on_approve: true,
+            slack_on_merge: true,
+            slack_approve_template: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍".into(),
+            slack_merge_template: "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀".into(),
         }
     }
 }

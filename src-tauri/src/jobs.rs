@@ -35,6 +35,31 @@ pub struct Job {
 
 pub type Jobs = Arc<Mutex<HashMap<String, Job>>>;
 
+pub fn claude_bin(settings: &Settings) -> Result<String, String> {
+    if settings.claude_path.trim().is_empty() {
+        crate::shell::which("claude").ok_or_else(|| "`claude` not found on PATH; set its path in Settings".to_string())
+    } else {
+        Ok(settings.claude_path.clone())
+    }
+}
+
+pub fn claude_command(claude: &str) -> Command {
+    let mut cmd = Command::new(claude);
+    // Launched from inside a Claude Code session (e.g. `tauri dev` run by Claude), the
+    // child would inherit that session's host-auth wiring and fail to log in.
+    if std::env::var_os("CLAUDECODE").is_some() {
+        for (k, _) in std::env::vars_os() {
+            let k = k.to_string_lossy().to_string();
+            if k == "CLAUDECODE" || k == "ANTHROPIC_BASE_URL" || k.starts_with("CLAUDE_CODE_")
+                || k.starts_with("CLAUDE_AGENT_") || k == "CLAUDE_PID" || k == "CLAUDE_EFFORT"
+            {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    cmd
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -236,11 +261,7 @@ fn run(
     };
     std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
 
-    let claude = if settings.claude_path.trim().is_empty() {
-        crate::shell::which("claude").ok_or("`claude` not found on PATH; set its path in Settings")?
-    } else {
-        settings.claude_path.clone()
-    };
+    let claude = claude_bin(settings)?;
 
     let mut args: Vec<String> = vec![];
     let model;
@@ -278,19 +299,7 @@ fn run(
         return Ok(());
     }
     progress(app, jobs, id, &format!("Starting claude in {}", cwd.display()));
-    let mut cmd = Command::new(&claude);
-    // Launched from inside a Claude Code session (e.g. `tauri dev` run by Claude), the
-    // child would inherit that session's host-auth wiring and fail to log in.
-    if std::env::var_os("CLAUDECODE").is_some() {
-        for (k, _) in std::env::vars_os() {
-            let k = k.to_string_lossy().to_string();
-            if k == "CLAUDECODE" || k == "ANTHROPIC_BASE_URL" || k.starts_with("CLAUDE_CODE_")
-                || k.starts_with("CLAUDE_AGENT_") || k == "CLAUDE_PID" || k == "CLAUDE_EFFORT"
-            {
-                cmd.env_remove(k);
-            }
-        }
-    }
+    let mut cmd = claude_command(&claude);
     let mut child = cmd
         .args(&args)
         .current_dir(&cwd)

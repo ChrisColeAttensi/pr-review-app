@@ -22,6 +22,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [usage, setUsage] = useState<{ count: number; bytes: number }>();
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState<string>();
+  const [slackMsg, setSlackMsg] = useState<string>();
 
   useEffect(() => {
     api.settings().then(setS);
@@ -165,6 +166,34 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <button className="danger" disabled={cleaning || !usage?.count} onClick={() => clean(true)} title="Remove every worktree not in use by a running job">Remove all</button>
             </div>
             {cleanMsg && <p className="muted small">{cleanMsg}</p>}
+          </section>
+
+          <section>
+            <h3>Slack</h3>
+            <p className="muted small">
+              After you approve or merge someone else's PR, offer to DM them. Messages go out as you through your
+              Claude Slack connector; nothing is sent until you click Send.
+            </p>
+            <label className="check"><input type="checkbox" checked={s.slackOnApprove} onChange={(e) => set({ slackOnApprove: e.target.checked })} /> Offer after approving</label>
+            <label className="check"><input type="checkbox" checked={s.slackOnMerge} onChange={(e) => set({ slackOnMerge: e.target.checked })} /> Offer after merging</label>
+            <label className="field col">
+              <span>Approve message</span>
+              <input value={s.slackApproveTemplate} onChange={(e) => set({ slackApproveTemplate: e.target.value })} />
+            </label>
+            <label className="field col">
+              <span>Merge message</span>
+              <input value={s.slackMergeTemplate} onChange={(e) => set({ slackMergeTemplate: e.target.value })} />
+            </label>
+            <p className="muted small">
+              <code>{"{first}"}</code> <code>{"{name}"}</code> <code>{"{title}"}</code> <code>{"{url}"}</code> <code>{"{repo}"}</code> <code>{"{number}"}</code> are filled in. Markdown links work.
+            </p>
+            <div className="row">
+              <button disabled={slackMsg === "Sending…"} onClick={() => {
+                setSlackMsg("Sending…");
+                api.slackTest().then(() => setSlackMsg("Sent ✓ — check your Slack DMs with yourself.")).catch((e) => setSlackMsg(String(e)));
+              }}>Send test message to myself</button>
+              {slackMsg && <span className="muted small">{slackMsg}</span>}
+            </div>
           </section>
 
           <section>

@@ -130,60 +130,79 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
 }
 
 fn attention_count(prs: &[Pr]) -> usize {
-    prs.iter()
-        .filter(|p| p.categories.iter().any(|c| c == "reviewRequested" || c == "reReview"))
-        .count()
+    prs.iter().filter(|p| p.categories.iter().any(|c| c == "reviewRequested")).count()
+}
+
+fn short_title(p: &Pr) -> String {
+    let t = &p.title;
+    let t = if t.chars().count() > 48 { t.chars().take(47).collect::<String>() + "…" } else { t.clone() };
+    format!("{t}  ({}#{})", p.repo.split('/').last().unwrap_or(""), p.number)
+}
+
+/// My PR's review verdict. `reviewDecision` is null in repos without required
+/// reviews, so fall back to the latest reviews.
+fn approval_mark(p: &Pr) -> &'static str {
+    let decision = p.review_decision.as_deref().unwrap_or_else(|| {
+        let states: Vec<&str> = p.latest_reviews.iter().map(|r| r.state.as_str()).collect();
+        if states.contains(&"CHANGES_REQUESTED") {
+            "CHANGES_REQUESTED"
+        } else if states.contains(&"APPROVED") {
+            "APPROVED"
+        } else {
+            "REVIEW_REQUIRED"
+        }
+    });
+    match decision {
+        "APPROVED" => "✅",
+        "CHANGES_REQUESTED" => "❌",
+        _ => "⏳",
+    }
 }
 
 fn rebuild_tray(app: &AppHandle, snap: &Snapshot) {
     let Some(tray) = app.tray_by_id("main") else { return };
     let n = attention_count(&snap.prs);
     let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
-    let _ = tray.set_tooltip(Some(format!("PR Review — {n} need you")));
+    let _ = tray.set_tooltip(Some(format!("PR Review — {n} review requests")));
 
+    let has = |p: &Pr, c: &str| p.categories.iter().any(|x| x == c);
     let build = || -> tauri::Result<Menu<Wry>> {
-        let mut items: Vec<MenuItem<Wry>> = vec![];
-        items.push(MenuItem::with_id(app, "open", "Open PR Review", true, None::<&str>)?);
-        items.push(MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?);
-        let mut pr_items: Vec<MenuItem<Wry>> = vec![];
-        let needing: Vec<&Pr> = snap
+        let item = |id: String, text: String, enabled: bool| MenuItem::with_id(app, id, text, enabled, None::<&str>);
+        let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![
+            Box::new(item("open".into(), "Open PR Review".into(), true)?),
+            Box::new(item("refresh".into(), "Refresh now".into(), true)?),
+        ];
+        let mut section = |title: &str, rows: Vec<(String, String)>, empty: &str| -> tauri::Result<()> {
+            items.push(Box::new(PredefinedMenuItem::separator(app)?));
+            items.push(Box::new(item(format!("h:{title}"), title.to_string(), false)?));
+            if rows.is_empty() {
+                items.push(Box::new(item(format!("e:{title}"), format!("   {empty}"), false)?));
+            }
+            for (key, text) in rows {
+                items.push(Box::new(item(format!("pr:{key}"), text, true)?));
+            }
+            Ok(())
+        };
+        let requested: Vec<(String, String)> = snap
             .prs
             .iter()
-            .filter(|p| p.categories.iter().any(|c| c == "reviewRequested" || c == "reReview"))
-            .take(10)
+            .filter(|p| has(p, "reviewRequested"))
+            .take(12)
+            .map(|p| (p.key.clone(), format!("   {}", short_title(p))))
             .collect();
-        if needing.is_empty() {
-            pr_items.push(MenuItem::with_id(app, "none", "Nothing waiting on you", false, None::<&str>)?);
-        }
-        for p in needing {
-            let mark = if p.categories.iter().any(|c| c == "reReview") { "↻" } else { "●" };
-            let mut t = p.title.clone();
-            if t.chars().count() > 48 {
-                t = t.chars().take(47).collect::<String>() + "…";
-            }
-            pr_items.push(MenuItem::with_id(
-                app,
-                format!("pr:{}", p.key),
-                format!("{mark} {t}  ({}#{})", p.repo.split('/').last().unwrap_or(""), p.number),
-                true,
-                None::<&str>,
-            )?);
-        }
-        let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?;
-        let quit = MenuItem::with_id(app, "quit", "Quit PR Review", true, Some("Cmd+Q"))?;
-        let sep1 = PredefinedMenuItem::separator(app)?;
-        let sep2 = PredefinedMenuItem::separator(app)?;
-        let mut refs: Vec<&dyn IsMenuItem<Wry>> = vec![];
-        for i in &items {
-            refs.push(i);
-        }
-        refs.push(&sep1);
-        for i in &pr_items {
-            refs.push(i);
-        }
-        refs.push(&sep2);
-        refs.push(&settings);
-        refs.push(&quit);
+        section("Review requested", requested, "Nothing waiting on you")?;
+        let mine: Vec<(String, String)> = snap
+            .prs
+            .iter()
+            .filter(|p| has(p, "mine"))
+            .take(12)
+            .map(|p| (p.key.clone(), format!("{} {}", approval_mark(p), short_title(p))))
+            .collect();
+        section("My PRs", mine, "No open PRs")?;
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+        items.push(Box::new(MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?));
+        items.push(Box::new(MenuItem::with_id(app, "quit", "Quit PR Review", true, Some("Cmd+Q"))?));
+        let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|b| b.as_ref()).collect();
         Menu::with_items(app, &refs)
     };
     if let Ok(menu) = build() {

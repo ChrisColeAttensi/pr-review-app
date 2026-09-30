@@ -17,7 +17,7 @@ pub struct Categories {
 
 impl Default for Categories {
     fn default() -> Self {
-        Self { review_requested: true, re_review: true, watched: true, mine: true }
+        Self { review_requested: true, re_review: false, watched: true, mine: true }
     }
 }
 

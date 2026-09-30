@@ -16,6 +16,8 @@ export interface MergeInfo {
     mergeStateStatus: string;
     headRefOid: string;
     viewerCanMergeAsAdmin: boolean;
+    /** Rulesets on the base branch all let the viewer bypass for PRs. */
+    viewerCanBypassRulesets?: boolean;
     viewerCanEnableAutoMerge: boolean;
     autoMergeRequest: { enabledAt: string; mergeMethod: string } | null;
   };
@@ -53,7 +55,7 @@ function status(info: MergeInfo): { text: string; tone: Tone; canMerge: boolean 
 const canWrite = (info: MergeInfo) => ["ADMIN", "MAINTAIN", "WRITE"].includes(info.viewerPermission);
 // Conflicts and drafts stop an admin merge too.
 const canBypass = (info: MergeInfo) =>
-  info.pullRequest.viewerCanMergeAsAdmin && !["CLEAN", "HAS_HOOKS", "DIRTY", "DRAFT"].includes(info.pullRequest.mergeStateStatus);
+  (info.pullRequest.viewerCanMergeAsAdmin || !!info.pullRequest.viewerCanBypassRulesets) && !["CLEAN", "HAS_HOOKS", "DIRTY", "DRAFT"].includes(info.pullRequest.mergeStateStatus);
 const canAuto = (info: MergeInfo) =>
   info.autoMergeAllowed && info.pullRequest.viewerCanEnableAutoMerge && !info.pullRequest.autoMergeRequest;
 
@@ -195,7 +197,7 @@ export function MergeDialog({ pr, info, onClose, onMerged }: {
           {canBypass(info) && (
             <label className="check override">
               <input type="checkbox" checked={admin} onChange={(e) => { setAdmin(e.target.checked); if (e.target.checked) setAuto(false); }} />
-              <span><b>Merge without waiting for requirements to be met</b> (bypass branch rules as admin)</span>
+              <span><b>Merge without waiting for requirements to be met</b> (bypass branch rules)</span>
             </label>
           )}
           {!st.canMerge && canAuto(info) && (

@@ -430,6 +430,17 @@ async fn merge_pr(app: AppHandle, request: github::MergeRequest) -> Result<Strin
 }
 
 #[tauri::command]
+async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = github::submit_review(&request)?;
+        let _ = app.state::<AppState>().wake.lock().unwrap().send(());
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
@@ -539,7 +550,8 @@ pub fn run() {
             cleanup_worktrees,
             worktree_usage,
             merge_info,
-            merge_pr
+            merge_pr,
+            submit_review
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

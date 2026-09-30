@@ -8,6 +8,7 @@ import { JobLog } from "./JobLog";
 import { Markdown } from "./Markdown";
 import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
+import { ReviewButton, ReviewDialog } from "./ReviewDialog";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 
@@ -47,6 +48,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
   const merge = useMergeInfo(pr);
   const [merging, setMerging] = useState(false);
   const [merged, setMerged] = useState<string>();
+  const [reviewing, setReviewing] = useState(false);
 
   const reviewJob = jobs.latest(pr.key, "review");
   const insightsJob = jobs.latest(pr.key, "insights");
@@ -147,6 +149,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
           </h1>
           <div className="row">
             <button onClick={() => openUrl(pr.url)}>Open on GitHub ↗</button>
+            <ReviewButton pr={pr} me={me} onClick={() => setReviewing(true)} />
             <MergeButton info={merge.info} onClick={() => setMerging(true)} />
             <button
               className={running("insights") ? "busy" : ""}
@@ -201,7 +204,15 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
         </nav>
       </header>
 
-      {merged && <div className="banner ok">{merged}. It leaves the list on the next refresh.</div>}
+      {merged && (
+        <div className="banner ok">
+          {merged}.{merged === "Merged" ? " It leaves the list on the next refresh." : ""}
+        </div>
+      )}
+      {reviewing && (
+        <ReviewDialog pr={pr} me={me} onClose={() => setReviewing(false)}
+          onDone={(m) => { setReviewing(false); setMerged(m); merge.reload(); }} />
+      )}
       {merging && merge.info && (
         <MergeDialog pr={pr} info={merge.info} onClose={() => setMerging(false)}
           onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); }} />

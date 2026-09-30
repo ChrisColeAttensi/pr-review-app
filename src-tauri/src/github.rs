@@ -303,7 +303,7 @@ query($owner: String!, $name: String!, $number: Int!) {
     viewerPermission squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed
     deleteBranchOnMerge autoMergeAllowed
     pullRequest(number: $number) {
-      state isDraft mergeable mergeStateStatus headRefOid
+      state isDraft mergeable mergeStateStatus headRefOid baseRefName
       viewerCanMergeAsAdmin viewerCanEnableAutoMerge
       autoMergeRequest { enabledAt mergeMethod }
     }
@@ -326,7 +326,57 @@ pub fn merge_info(repo: &str, number: u64) -> Result<Value, String> {
         None,
     )?;
     let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
-    v.pointer("/data/repository").cloned().ok_or_else(|| "no repository in response".into())
+    let mut repo_v = v.pointer("/data/repository").cloned().ok_or("no repository in response")?;
+    let base = repo_v.pointer("/pullRequest/baseRefName").and_then(|b| b.as_str()).unwrap_or_default().to_string();
+    let bypass = can_bypass_rulesets(repo, &base);
+    if let Some(pr) = repo_v.get_mut("pullRequest").and_then(|p| p.as_object_mut()) {
+        pr.insert("viewerCanBypassRulesets".into(), Value::Bool(bypass));
+    }
+    Ok(repo_v)
+}
+
+/// `viewerCanMergeAsAdmin` only reflects classic branch protection. Repos on
+/// rulesets say who may bypass per ruleset; the viewer can override a PR merge when
+/// every ruleset on the base branch lets them bypass for pull requests.
+fn can_bypass_rulesets(repo: &str, base: &str) -> bool {
+    if base.is_empty() {
+        return false;
+    }
+    let Ok(out) = shell::run("gh", &["api", &format!("repos/{repo}/rules/branches/{base}"), "--jq", "[.[].ruleset_id] | unique | .[]"], None) else {
+        return false;
+    };
+    let ids: Vec<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    !ids.is_empty()
+        && ids.iter().all(|id| {
+            shell::run("gh", &["api", &format!("repos/{repo}/rulesets/{id}"), "--jq", ".current_user_can_bypass"], None)
+                .map(|b| matches!(b.trim(), "always" | "pull_requests_only"))
+                .unwrap_or(false)
+        })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRequest {
+    pub repo: String,
+    pub number: u64,
+    /// approve | request_changes | comment
+    pub event: String,
+    pub body: String,
+}
+
+pub fn submit_review(r: &ReviewRequest) -> Result<String, String> {
+    let n = r.number.to_string();
+    let flag = match r.event.as_str() {
+        "approve" => "--approve",
+        "request_changes" => "--request-changes",
+        "comment" => "--comment",
+        e => return Err(format!("unknown review event {e}")),
+    };
+    let mut args = vec!["pr", "review", &n, "-R", &r.repo, flag];
+    if !r.body.trim().is_empty() {
+        args.extend(["--body", r.body.as_str()]);
+    }
+    shell::run("gh", &args, None)
 }
 
 #[derive(Deserialize)]

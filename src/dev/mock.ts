@@ -48,8 +48,9 @@ export function installMock() {
           viewerPermission: "ADMIN", squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: false,
           deleteBranchOnMerge: false, autoMergeAllowed: true,
           pullRequest: { state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", headRefOid: "ca8b7d1f00",
-            viewerCanMergeAsAdmin: true, viewerCanEnableAutoMerge: true, autoMergeRequest: null },
+            viewerCanMergeAsAdmin: false, viewerCanBypassRulesets: true, viewerCanEnableAutoMerge: true, autoMergeRequest: null },
         };
+        case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
         case "merge_pr": await new Promise((r) => setTimeout(r, 600)); return "";
         case "worktree_usage": return { count: 3, bytes: 1.4e9 };
         case "cleanup_worktrees": return { removed: args.everything ? ["Attensi/impact#817 (removed by you)"] : [], kept: args.everything ? 0 : 3 };

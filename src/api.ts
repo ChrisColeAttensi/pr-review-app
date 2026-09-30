@@ -30,6 +30,8 @@ export const api = {
     repo: string; number: number; method: string; admin: boolean; auto: boolean;
     deleteBranch: boolean; headSha: string; subject: string; body: string;
   }) => invoke<string>("merge_pr", { request }),
+  submitReview: (request: { repo: string; number: number; event: "approve" | "request_changes" | "comment"; body: string }) =>
+    invoke<string>("submit_review", { request }),
   cleanWorktree: (repo: string, number: number) => invoke<void>("clean_worktree", { repo, number }),
 };
 

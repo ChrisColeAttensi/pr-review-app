@@ -89,6 +89,36 @@ pub struct Pr {
     pub categories: Vec<String>,
     /// I reviewed an older commit than the current head.
     pub needs_re_review: bool,
+    /// Waiting on me: a review request, or my PR is approved (merge it), has changes
+    /// requested, or fails CI.
+    pub needs_action: bool,
+}
+
+/// `reviewDecision` is null in repos without required reviews, so fall back to the
+/// latest reviews. Returns APPROVED, CHANGES_REQUESTED or REVIEW_REQUIRED.
+pub fn approval(p: &Pr) -> &str {
+    if let Some(d) = p.review_decision.as_deref() {
+        return d;
+    }
+    let states: Vec<&str> = p.latest_reviews.iter().map(|r| r.state.as_str()).collect();
+    if states.contains(&"CHANGES_REQUESTED") {
+        "CHANGES_REQUESTED"
+    } else if states.contains(&"APPROVED") {
+        "APPROVED"
+    } else {
+        "REVIEW_REQUIRED"
+    }
+}
+
+pub fn ci_failed(p: &Pr) -> bool {
+    matches!(p.ci.as_deref(), Some("FAILURE") | Some("ERROR"))
+}
+
+fn needs_action(p: &Pr) -> bool {
+    let has = |c: &str| p.categories.iter().any(|x| x == c);
+    has("reviewRequested")
+        || has("reReview")
+        || (has("mine") && (approval(p) != "REVIEW_REQUIRED" || ci_failed(p)))
 }
 
 fn s(v: &Value, ptr: &str) -> String {
@@ -181,6 +211,7 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
         latest_reviews,
         categories: vec![],
         needs_re_review,
+        needs_action: false,
     })
 }
 
@@ -241,6 +272,9 @@ pub fn fetch_all(settings: &Settings) -> FetchResult {
         }
     }
     let mut prs: Vec<Pr> = by_key.into_values().collect();
+    for p in &mut prs {
+        p.needs_action = needs_action(p);
+    }
     prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     FetchResult { me, prs, errors }
 }

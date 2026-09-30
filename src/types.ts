@@ -31,6 +31,7 @@ export interface Pr {
   latestReviews?: { author: string; avatar: string; state: string }[];
   categories: Category[];
   needsReReview: boolean;
+  needsAction: boolean;
 }
 
 export interface Snapshot {
@@ -53,6 +54,8 @@ export interface Settings {
   notifications: boolean;
   categories: Categories;
   notifyCategories: Categories;
+  actionableOnly: boolean;
+  showDrafts: boolean;
   directRequestsOnly: boolean;
   watchedRepos: string[];
   repoRoots: string[];

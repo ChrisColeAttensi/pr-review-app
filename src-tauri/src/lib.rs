@@ -49,6 +49,8 @@ struct Seen {
     ci: Option<String>,
     reviews: usize,
     categories: Vec<String>,
+    #[serde(default)]
+    draft: bool,
 }
 
 fn settings_path(data: &PathBuf) -> PathBuf {
@@ -73,12 +75,15 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
             ci: pr.ci.clone(),
             reviews: reviews_by_others,
             categories: pr.categories.clone(),
+            draft: pr.is_draft,
         };
         seen.insert(pr.key.clone(), now);
-        if first_run || !s.notifications {
+        if first_run || !s.notifications || (pr.is_draft && !s.show_drafts) {
             continue;
         }
-        let was = |c: &str| prev.as_ref().map(|p| p.categories.iter().any(|x| x == c)).unwrap_or(false);
+        // A hidden draft that turns ready counts as new.
+        let was_hidden = prev.as_ref().is_some_and(|p| p.draft && !s.show_drafts);
+        let was = |c: &str| !was_hidden && prev.as_ref().map(|p| p.categories.iter().any(|x| x == c)).unwrap_or(false);
         let label = format!("{}#{}", pr.repo, pr.number);
 
         if has("reviewRequested") && !was("reviewRequested") {
@@ -129,8 +134,14 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
     }
 }
 
-fn attention_count(prs: &[Pr]) -> usize {
-    prs.iter().filter(|p| p.categories.iter().any(|c| c == "reviewRequested")).count()
+fn visible(p: &Pr, s: &Settings) -> bool {
+    (s.show_drafts || !p.is_draft) && (!s.actionable_only || p.needs_action)
+}
+
+fn attention_count(prs: &[Pr], s: &Settings) -> usize {
+    prs.iter()
+        .filter(|p| visible(p, s) && p.categories.iter().any(|c| c == "reviewRequested"))
+        .count()
 }
 
 fn short_title(p: &Pr) -> String {
@@ -139,29 +150,18 @@ fn short_title(p: &Pr) -> String {
     format!("{t}  ({}#{})", p.repo.split('/').last().unwrap_or(""), p.number)
 }
 
-/// My PR's review verdict. `reviewDecision` is null in repos without required
-/// reviews, so fall back to the latest reviews.
-fn approval_mark(p: &Pr) -> &'static str {
-    let decision = p.review_decision.as_deref().unwrap_or_else(|| {
-        let states: Vec<&str> = p.latest_reviews.iter().map(|r| r.state.as_str()).collect();
-        if states.contains(&"CHANGES_REQUESTED") {
-            "CHANGES_REQUESTED"
-        } else if states.contains(&"APPROVED") {
-            "APPROVED"
-        } else {
-            "REVIEW_REQUIRED"
-        }
-    });
-    match decision {
+fn approval_mark(p: &Pr) -> String {
+    let mark = match github::approval(p) {
         "APPROVED" => "✅",
         "CHANGES_REQUESTED" => "❌",
         _ => "⏳",
-    }
+    };
+    if github::ci_failed(p) { format!("{mark}🔴") } else { mark.to_string() }
 }
 
-fn rebuild_tray(app: &AppHandle, snap: &Snapshot) {
+fn rebuild_tray(app: &AppHandle, snap: &Snapshot, s: &Settings) {
     let Some(tray) = app.tray_by_id("main") else { return };
-    let n = attention_count(&snap.prs);
+    let n = attention_count(&snap.prs, s);
     let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
     let _ = tray.set_tooltip(Some(format!("PR Review — {n} review requests")));
 
@@ -186,7 +186,7 @@ fn rebuild_tray(app: &AppHandle, snap: &Snapshot) {
         let requested: Vec<(String, String)> = snap
             .prs
             .iter()
-            .filter(|p| has(p, "reviewRequested"))
+            .filter(|p| visible(p, s) && has(p, "reviewRequested"))
             .take(12)
             .map(|p| (p.key.clone(), format!("   {}", short_title(p))))
             .collect();
@@ -194,11 +194,11 @@ fn rebuild_tray(app: &AppHandle, snap: &Snapshot) {
         let mine: Vec<(String, String)> = snap
             .prs
             .iter()
-            .filter(|p| has(p, "mine"))
+            .filter(|p| visible(p, s) && has(p, "mine"))
             .take(12)
             .map(|p| (p.key.clone(), format!("{} {}", approval_mark(p), short_title(p))))
             .collect();
-        section("My PRs", mine, "No open PRs")?;
+        section("My PRs", mine, if s.actionable_only { "Nothing to act on" } else { "No open PRs" })?;
         items.push(Box::new(PredefinedMenuItem::separator(app)?));
         items.push(Box::new(MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?));
         items.push(Box::new(MenuItem::with_id(app, "quit", "Quit PR Review", true, Some("Cmd+Q"))?));
@@ -247,7 +247,8 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             let _ = app.emit("prs-updated", snap.clone());
             let app2 = app.clone();
             let tray_snap = snap.clone();
-            let _ = app.run_on_main_thread(move || rebuild_tray(&app2, &tray_snap));
+            let tray_settings = state.settings.lock().unwrap().clone();
+            let _ = app.run_on_main_thread(move || rebuild_tray(&app2, &tray_snap, &tray_settings));
 
             if !snap.loading && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
                 last_cleanup = Some(Instant::now());

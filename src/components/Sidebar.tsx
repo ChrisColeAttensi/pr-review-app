@@ -30,20 +30,33 @@ export function sectionOf(pr: Pr): Category {
   return SECTIONS.find((s) => pr.categories.includes(s.id))!.id;
 }
 
-export function orderedPrs(prs: Pr[], filter: string): Pr[] {
+export interface ViewFilter {
+  actionableOnly: boolean;
+  showDrafts: boolean;
+}
+
+/** Same rule as the tray menu. */
+export const isVisible = (p: Pr, v: ViewFilter) => (v.showDrafts || !p.isDraft) && (!v.actionableOnly || p.needsAction);
+
+export function orderedPrs(prs: Pr[], filter: string, view: ViewFilter): Pr[] {
   const f = filter.toLowerCase();
-  const match = (p: Pr) => !f || `${p.title} ${p.repo} ${p.author} #${p.number}`.toLowerCase().includes(f);
+  const match = (p: Pr) =>
+    isVisible(p, view) && (!f || `${p.title} ${p.repo} ${p.author} #${p.number}`.toLowerCase().includes(f));
   return SECTIONS.flatMap((s) => prs.filter((p) => sectionOf(p) === s.id && match(p)));
 }
 
-export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filter, setFilter }: {
+export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filter, setFilter, view, setView }: {
+  view: ViewFilter; setView: (v: ViewFilter) => void;
   snap: Snapshot; selected?: string; onSelect: (k: string) => void; onSettings: () => void; onRefresh: () => void;
   filter: string; setFilter: (s: string) => void;
 }) {
   const { jobs } = useJobs();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const f = filter.toLowerCase();
-  const match = (p: Pr) => !f || `${p.title} ${p.repo} ${p.author} #${p.number}`.toLowerCase().includes(f);
+  const match = (p: Pr) =>
+    isVisible(p, view) && (!f || `${p.title} ${p.repo} ${p.author} #${p.number}`.toLowerCase().includes(f));
+  const hidden = snap.prs.filter((p) => !isVisible(p, view)).length;
+  const shownCount = snap.prs.length - hidden;
   const runningFor = (key: string) => jobs.some((j) => j.prKey === key && j.status === "running");
 
   return (
@@ -57,6 +70,10 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
       </div>
       <div className="side-search">
         <input placeholder="Filter PRs…  (/)" value={filter} onChange={(e) => setFilter(e.target.value)} id="pr-filter" />
+      </div>
+      <div className="side-filters">
+        <label><input type="checkbox" checked={view.actionableOnly} onChange={(e) => setView({ ...view, actionableOnly: e.target.checked })} /> Needs action only</label>
+        <label><input type="checkbox" checked={view.showDrafts} onChange={(e) => setView({ ...view, showDrafts: e.target.checked })} /> Show drafts</label>
       </div>
       <div className="side-list">
         {SECTIONS.map((s) => {
@@ -78,7 +95,10 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
                         {p.title}
                       </div>
                       {s.id === "mine" && (
-                        <span className={`approval approval-${approvalOf(p)}`}>{APPROVAL_LABEL[approvalOf(p)]}</span>
+                        <span className={`approval approval-${approvalOf(p)}`}>
+                          {APPROVAL_LABEL[approvalOf(p)]}
+                          {(p.ci === "FAILURE" || p.ci === "ERROR") && <span className="approval-changes"> · CI failing</span>}
+                        </span>
                       )}
                       <div className="pr-item-sub">
                         <span>{p.repo.split("/")[1]}#{p.number}</span>
@@ -98,7 +118,9 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
             </div>
           );
         })}
-        {!snap.loading && snap.prs.length === 0 && <p className="muted pad">No open PRs match your settings.</p>}
+        {!snap.loading && shownCount === 0 && (
+          <p className="muted pad">{hidden ? "Nothing needs your action." : "No open PRs match your settings."}</p>
+        )}
         {snap.errors.map((e, i) => (
           <p key={i} className="banner error small">{e}</p>
         ))}
@@ -106,6 +128,7 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
       <div className="side-foot muted small">
         {snap.me && <>@{snap.me} · </>}
         {snap.fetchedAt ? `updated ${timeAgo(snap.fetchedAt)}` : "loading…"}
+        {hidden > 0 && <> · {hidden} hidden</>}
       </div>
     </aside>
   );

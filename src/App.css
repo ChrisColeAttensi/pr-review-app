@@ -410,3 +410,9 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .approval-approved { color: var(--add); }
 .approval-changes { color: var(--del); }
 .approval-waiting { color: var(--warn); }
+
+.side-filters { display: flex; gap: 14px; padding: 0 12px 6px; font-size: 12px; color: var(--fg-muted); }
+.side-filters label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.md details { margin: 6px 0; }
+.md summary { cursor: pointer; }
+.md details > :not(summary) { margin-left: 16px; }

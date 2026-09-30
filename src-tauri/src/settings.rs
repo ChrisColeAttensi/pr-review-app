@@ -30,6 +30,9 @@ pub struct Settings {
     pub categories: Categories,
     /// Which categories raise a desktop notification.
     pub notify_categories: Categories,
+    /// Hide PRs that are not waiting on me.
+    pub actionable_only: bool,
+    pub show_drafts: bool,
     /// Only requests naming me, not my teams.
     pub direct_requests_only: bool,
     pub watched_repos: Vec<String>,
@@ -57,6 +60,8 @@ impl Default for Settings {
             notifications: true,
             categories: Categories::default(),
             notify_categories: Categories::default(),
+            actionable_only: true,
+            show_drafts: false,
             direct_requests_only: false,
             watched_repos: vec![],
             repo_roots: vec!["~/Developer".into()],

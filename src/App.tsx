@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { JobsProvider } from "./jobs";
-import { orderedPrs, Sidebar } from "./components/Sidebar";
+import { orderedPrs, Sidebar, type ViewFilter } from "./components/Sidebar";
 import { PrView, type Tab } from "./components/PrView";
 import { SettingsDialog } from "./components/SettingsDialog";
 import type { Snapshot } from "./types";
@@ -17,6 +17,16 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [view, setViewState] = useState<ViewFilter>({ actionableOnly: true, showDrafts: false });
+  // Stored in settings so the tray menu and notifications follow the same filter.
+  const setView = async (v: ViewFilter) => {
+    setViewState(v);
+    const s = await api.settings();
+    await api.saveSettings({ ...s, ...v });
+  };
+  useEffect(() => {
+    if (!settingsOpen) api.settings().then((s) => setViewState({ actionableOnly: s.actionableOnly, showDrafts: s.showDrafts }));
+  }, [settingsOpen]);
 
   useEffect(() => {
     api.snapshot().then(setSnap);
@@ -28,11 +38,11 @@ export default function App() {
     return () => uns.forEach((u) => u.then((f) => f()));
   }, []);
 
-  const ordered = useMemo(() => orderedPrs(snap.prs, filter), [snap.prs, filter]);
+  const ordered = useMemo(() => orderedPrs(snap.prs, filter, view), [snap.prs, filter, view]);
   const pr = snap.prs.find((p) => p.key === selected);
 
   useEffect(() => {
-    if (!selected && ordered.length) setSelected(ordered[0].key);
+    if (ordered.length && !ordered.some((p) => p.key === selected)) setSelected(ordered[0].key);
   }, [ordered, selected]);
 
   useEffect(() => {
@@ -64,6 +74,8 @@ export default function App() {
           onRefresh={() => api.refresh()}
           filter={filter}
           setFilter={setFilter}
+          view={view}
+          setView={setView}
         />
         <main className="main">
           {pr ? (

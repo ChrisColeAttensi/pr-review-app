@@ -10,12 +10,16 @@ const json = (name: string, fallback: unknown) => (get(name) ? JSON.parse(get(na
 export function installMock() {
   const snapshot = json("snapshot.json", { me: "me", prs: [], errors: [], fetchedAt: Date.now(), loading: false });
   snapshot.fetchedAt = Date.now();
+  for (const p of snapshot.prs) {
+    const approved = p.reviewDecision === "APPROVED" || p.reviewDecision === "CHANGES_REQUESTED";
+    p.needsAction = p.categories.includes("reviewRequested") || (p.categories.includes("mine") && (approved || p.ci === "FAILURE"));
+  }
   let drafts: unknown[] = [];
   const settings = {
     pollIntervalSecs: 120, notifications: true,
     categories: { reviewRequested: true, reReview: true, watched: true, mine: true },
     notifyCategories: { reviewRequested: true, reReview: true, watched: false, mine: true },
-    directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
+    actionableOnly: true, showDrafts: false, directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
     claudePath: "", reviewCommand: "/chriscole-skills:pr-review {url}", permissionMode: "auto",
     reviewModel: "", insightsModel: "", autoInsights: false, worktreeRetentionDays: 7,
   };
@@ -25,6 +29,7 @@ export function installMock() {
       switch (cmd) {
         case "get_snapshot": return snapshot;
         case "get_settings": return settings;
+        case "save_settings": Object.assign(settings, args.settings); return null;
         case "discover_repos": return { "attensi/impact": "~/Developer/impact" };
         case "pr_detail": return json("detail.json", {});
         case "pr_diff": return get("diff.patch") ?? "";

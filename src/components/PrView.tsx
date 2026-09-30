@@ -7,6 +7,7 @@ import { DiffFile, filePath } from "./DiffFile";
 import { JobLog } from "./JobLog";
 import { Markdown } from "./Markdown";
 import { ReviewerList, ReviewerStack } from "./Reviewers";
+import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 
@@ -43,6 +44,9 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
   const [err, setErr] = useState<string>();
   const [viewType, setViewType] = useViewType();
   const jobs = useJobs();
+  const merge = useMergeInfo(pr);
+  const [merging, setMerging] = useState(false);
+  const [merged, setMerged] = useState<string>();
 
   const reviewJob = jobs.latest(pr.key, "review");
   const insightsJob = jobs.latest(pr.key, "insights");
@@ -143,6 +147,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
           </h1>
           <div className="row">
             <button onClick={() => openUrl(pr.url)}>Open on GitHub ↗</button>
+            <MergeButton info={merge.info} onClick={() => setMerging(true)} />
             <button
               className={running("insights") ? "busy" : ""}
               onClick={() => { setTab("walkthrough"); if (!running("insights")) jobs.start(pr.repo, pr.number, "insights"); }}
@@ -196,6 +201,11 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
         </nav>
       </header>
 
+      {merged && <div className="banner ok">{merged}. It leaves the list on the next refresh.</div>}
+      {merging && merge.info && (
+        <MergeDialog pr={pr} info={merge.info} onClose={() => setMerging(false)}
+          onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); }} />
+      )}
       {jobs.error && <div className="banner error">{jobs.error}</div>}
       {[insightsJob, reviewJob].map((j) => j?.status === "failed" && (
         <div key={j.id} className="banner error row">
@@ -209,7 +219,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
 
       <div className="pr-body">
         {tab === "overview" && (
-          <Overview pr={pr} me={me} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
+          <Overview pr={pr} me={me} mergeCard={<MergeCard info={merge.info} err={merge.err} onMerge={() => setMerging(true)} />} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
             onExplain={() => { setTab("walkthrough"); jobs.start(pr.repo, pr.number, "insights"); }} explaining={running("insights")} goto={setTab} />
         )}
 
@@ -273,8 +283,8 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
   );
 }
 
-function Overview({ pr, me, detail, insights, state, stale, onExplain, explaining, goto }: {
-  pr: Pr; me: string; detail?: PrDetail; insights?: Insights | null; state: PrState; stale: boolean;
+function Overview({ pr, me, mergeCard, detail, insights, state, stale, onExplain, explaining, goto }: {
+  pr: Pr; me: string; mergeCard: React.ReactNode; detail?: PrDetail; insights?: Insights | null; state: PrState; stale: boolean;
   onExplain: () => void; explaining: boolean; goto: (t: Tab) => void;
 }) {
   const checks = detail?.statusCheckRollup ?? [];
@@ -324,6 +334,7 @@ function Overview({ pr, me, detail, insights, state, stale, onExplain, explainin
         )}
       </div>
       <div className="col side">
+        {mergeCard}
         <div className="card">
           <h3>pr-review</h3>
           {state.review ? (

@@ -296,3 +296,79 @@ pub fn pr_detail(repo: &str, number: u64) -> Result<Value, String> {
 pub fn pr_diff(repo: &str, number: u64) -> Result<String, String> {
     shell::run("gh", &["pr", "diff", &number.to_string(), "-R", repo, "--color=never"], None)
 }
+
+const MERGE_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    viewerPermission squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed
+    deleteBranchOnMerge autoMergeAllowed
+    pullRequest(number: $number) {
+      state isDraft mergeable mergeStateStatus headRefOid
+      viewerCanMergeAsAdmin viewerCanEnableAutoMerge
+      autoMergeRequest { enabledAt mergeMethod }
+    }
+  }
+}"#;
+
+/// Everything the merge box needs: allowed methods, whether it can merge now, and
+/// whether the viewer may bypass branch protection.
+pub fn merge_info(repo: &str, number: u64) -> Result<Value, String> {
+    let (owner, name) = repo.split_once('/').ok_or("bad repo")?;
+    let out = shell::run(
+        "gh",
+        &[
+            "api", "graphql",
+            "-f", &format!("query={MERGE_QUERY}"),
+            "-f", &format!("owner={owner}"),
+            "-f", &format!("name={name}"),
+            "-F", &format!("number={number}"),
+        ],
+        None,
+    )?;
+    let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+    v.pointer("/data/repository").cloned().ok_or_else(|| "no repository in response".into())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRequest {
+    pub repo: String,
+    pub number: u64,
+    /// squash | merge | rebase
+    pub method: String,
+    pub admin: bool,
+    pub auto: bool,
+    pub delete_branch: bool,
+    /// Refuse to merge if the head moved since the user looked at it.
+    pub head_sha: String,
+    pub subject: String,
+    pub body: String,
+}
+
+pub fn merge(r: &MergeRequest) -> Result<String, String> {
+    let n = r.number.to_string();
+    let method = match r.method.as_str() {
+        "squash" => "--squash",
+        "rebase" => "--rebase",
+        "merge" => "--merge",
+        m => return Err(format!("unknown merge method {m}")),
+    };
+    let mut args = vec!["pr", "merge", &n, "-R", &r.repo, method, "--match-head-commit", &r.head_sha];
+    if r.admin {
+        args.push("--admin");
+    } else if r.auto {
+        args.push("--auto");
+    }
+    if r.delete_branch {
+        args.push("--delete-branch");
+    }
+    // Rebase merges have no merge commit to title.
+    if r.method != "rebase" && !r.subject.trim().is_empty() {
+        args.extend(["--subject", r.subject.as_str()]);
+    }
+    if r.method != "rebase" {
+        args.extend(["--body", r.body.as_str()]);
+    }
+    // No cwd: with -R, gh leaves every local checkout alone.
+    shell::run("gh", &args, None)
+}

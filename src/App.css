@@ -416,3 +416,20 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .md details { margin: 6px 0; }
 .md summary { cursor: pointer; }
 .md details > :not(summary) { margin-left: 16px; }
+
+/* ---------- merge ---------- */
+button.merge-btn { background: #1f883d; color: #fff; border-color: transparent; }
+button.merge-btn:hover:not(:disabled) { background: #1a7f37; }
+button.danger-fill { background: var(--del); color: #fff; border-color: transparent; }
+.merge-status { margin: 0 0 8px; font-weight: 500; }
+.tone-ok { color: var(--add); }
+.tone-warn { color: var(--warn); }
+.tone-bad { color: var(--del); }
+.tone-muted { color: var(--fg-muted); }
+.merge-modal { width: min(560px, calc(100vw - 32px)); }
+.method-seg { margin: 4px 0 10px; }
+.method-seg button { padding: 5px 12px; }
+label.check.override { align-items: flex-start; padding: 8px 10px; border-radius: 6px; background: var(--del-bg); color: var(--fg); }
+label.check.override input { margin-top: 3px; }
+.modal-foot { padding: 12px 18px; border-top: 1px solid var(--border); margin: 0; }
+.banner.ok { background: var(--add-bg); color: var(--add); }

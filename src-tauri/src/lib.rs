@@ -407,6 +407,29 @@ async fn worktree_usage(app: AppHandle) -> Result<cleanup::Usage, String> {
 }
 
 #[tauri::command]
+async fn merge_info(repo: String, number: u64) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || github::merge_info(&repo, number))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn merge_pr(app: AppHandle, request: github::MergeRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = github::merge(&request)?;
+        let state = app.state::<AppState>();
+        // The PR is gone from the lists now; drop its worktree and refresh straight away.
+        if !request.auto {
+            cleanup::remove(&store::worktree_dir(&state.data_dir, &request.repo, request.number));
+        }
+        let _ = state.wake.lock().unwrap().send(());
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
@@ -514,7 +537,9 @@ pub fn run() {
             set_autostart,
             run_history,
             cleanup_worktrees,
-            worktree_usage
+            worktree_usage,
+            merge_info,
+            merge_pr
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

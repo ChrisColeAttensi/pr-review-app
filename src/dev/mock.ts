@@ -44,6 +44,13 @@ export function installMock() {
         case "save_drafts": drafts = args.drafts; return null;
         case "list_jobs": return [];
         case "get_autostart": return false;
+        case "merge_info": return {
+          viewerPermission: "ADMIN", squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: false,
+          deleteBranchOnMerge: false, autoMergeAllowed: true,
+          pullRequest: { state: "OPEN", isDraft: false, mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", headRefOid: "ca8b7d1f00",
+            viewerCanMergeAsAdmin: true, viewerCanEnableAutoMerge: true, autoMergeRequest: null },
+        };
+        case "merge_pr": await new Promise((r) => setTimeout(r, 600)); return "";
         case "worktree_usage": return { count: 3, bytes: 1.4e9 };
         case "cleanup_worktrees": return { removed: args.everything ? ["Attensi/impact#817 (removed by you)"] : [], kept: args.everything ? 0 : 3 };
         case "run_history": return [

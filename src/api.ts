@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { HistoryRun } from "./estimate";
+import type { MergeInfo } from "./components/Merge";
 import type { JobInfo, JobKind, PrDetail, PrState, Settings, Snapshot, Draft } from "./types";
 
 export const api = {
@@ -24,6 +25,11 @@ export const api = {
   cleanupWorktrees: (everything: boolean) =>
     invoke<{ removed: string[]; kept: number }>("cleanup_worktrees", { everything }),
   worktreeUsage: () => invoke<{ count: number; bytes: number }>("worktree_usage"),
+  mergeInfo: (repo: string, number: number) => invoke<MergeInfo>("merge_info", { repo, number }),
+  mergePr: (request: {
+    repo: string; number: number; method: string; admin: boolean; auto: boolean;
+    deleteBranch: boolean; headSha: string; subject: string; body: string;
+  }) => invoke<string>("merge_pr", { request }),
   cleanWorktree: (repo: string, number: number) => invoke<void>("clean_worktree", { repo, number }),
 };
 

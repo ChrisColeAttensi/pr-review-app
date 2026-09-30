@@ -10,6 +10,21 @@ export const SECTIONS: { id: Category; label: string }[] = [
   { id: "watched", label: "Watched repos" },
 ];
 
+export type Approval = "approved" | "changes" | "waiting";
+
+/** Mirrors the tray: reviewDecision, or the latest reviews where no review is required. */
+export function approvalOf(p: Pr): Approval {
+  const states = (p.latestReviews ?? []).map((r) => r.state);
+  const d = p.reviewDecision ?? (states.includes("CHANGES_REQUESTED") ? "CHANGES_REQUESTED" : states.includes("APPROVED") ? "APPROVED" : "");
+  return d === "APPROVED" ? "approved" : d === "CHANGES_REQUESTED" ? "changes" : "waiting";
+}
+
+const APPROVAL_LABEL: Record<Approval, string> = {
+  approved: "✓ Approved",
+  changes: "✕ Changes requested",
+  waiting: "Awaiting review",
+};
+
 /** Each PR appears once, under its most urgent section. */
 export function sectionOf(pr: Pr): Category {
   return SECTIONS.find((s) => pr.categories.includes(s.id))!.id;
@@ -62,6 +77,9 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
                         {p.isDraft && <span className="badge tiny">draft</span>}
                         {p.title}
                       </div>
+                      {s.id === "mine" && (
+                        <span className={`approval approval-${approvalOf(p)}`}>{APPROVAL_LABEL[approvalOf(p)]}</span>
+                      )}
                       <div className="pr-item-sub">
                         <span>{p.repo.split("/")[1]}#{p.number}</span>
                         <span>· {p.author}</span>

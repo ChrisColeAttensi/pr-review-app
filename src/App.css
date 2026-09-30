@@ -405,3 +405,8 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .rv-state.rv-CHANGES_REQUESTED { color: var(--del); }
 .rv-state.rv-REQUESTED { color: var(--warn); }
 .rv-name .badge.tiny { margin: 0 0 0 6px; }
+
+.approval { display: inline-block; font-size: 10.5px; font-weight: 600; margin: 1px 0; }
+.approval-approved { color: var(--add); }
+.approval-changes { color: var(--del); }
+.approval-waiting { color: var(--warn); }

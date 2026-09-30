@@ -1,0 +1,163 @@
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import type { Categories, Settings } from "../types";
+
+const CATS: { id: keyof Categories; label: string; hint: string }[] = [
+  { id: "reviewRequested", label: "Review requested from me", hint: "Someone asks you (or your team) to review" },
+  { id: "reReview", label: "New commits on PRs I reviewed", hint: "The head moved past the commit you reviewed" },
+  { id: "mine", label: "My own PRs", hint: "CI finishes, or someone reviews" },
+  { id: "watched", label: "Watched repos", hint: "Any new PR in the repos listed below" },
+];
+
+const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+
+export function SettingsDialog({ onClose }: { onClose: () => void }) {
+  const [s, setS] = useState<Settings>();
+  const [found, setFound] = useState<Record<string, string>>();
+  const [overrideRepo, setOverrideRepo] = useState("");
+  const [overridePath, setOverridePath] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [autostart, setAutostart] = useState<boolean>();
+
+  useEffect(() => {
+    api.settings().then(setS);
+    api.discoverRepos().then(setFound);
+    api.getAutostart().then(setAutostart).catch(() => setAutostart(false));
+  }, []);
+  if (!s) return null;
+  const set = (patch: Partial<Settings>) => setS({ ...s, ...patch });
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveSettings(s);
+      onClose();
+    } catch (e) {
+      setErr(String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header className="row">
+          <h2>Settings</h2>
+          <span className="spacer" />
+          <button onClick={onClose}>Cancel</button>
+          <button className="primary" onClick={save} disabled={saving}>Save</button>
+        </header>
+        {err && <div className="banner error">{err}</div>}
+        <div className="modal-body">
+          <section>
+            <h3>General</h3>
+            <label className="check">
+              <input
+                type="checkbox"
+                disabled={autostart === undefined}
+                checked={!!autostart}
+                onChange={(e) =>
+                  api.setAutostart(e.target.checked).then(setAutostart).catch((x) => setErr(String(x)))
+                }
+              />
+              Launch at login <span className="muted small">starts quietly in the menu bar; applies immediately</span>
+            </label>
+          </section>
+
+          <section>
+            <h3>Monitoring</h3>
+            <table className="cat-table">
+              <thead>
+                <tr><th /><th>Show</th><th>Notify</th></tr>
+              </thead>
+              <tbody>
+                {CATS.map((c) => (
+                  <tr key={c.id}>
+                    <td><div>{c.label}</div><div className="muted small">{c.hint}</div></td>
+                    <td><input type="checkbox" checked={s.categories[c.id]} onChange={(e) => set({ categories: { ...s.categories, [c.id]: e.target.checked } })} /></td>
+                    <td><input type="checkbox" disabled={!s.categories[c.id] || !s.notifications} checked={s.notifyCategories[c.id]}
+                      onChange={(e) => set({ notifyCategories: { ...s.notifyCategories, [c.id]: e.target.checked } })} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
+            <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Only requests addressed to me directly (ignore team requests)</label>
+            <label className="field">
+              <span>Check every</span>
+              <select value={s.pollIntervalSecs} onChange={(e) => set({ pollIntervalSecs: Number(e.target.value) })}>
+                {[60, 120, 300, 600, 1800].map((n) => <option key={n} value={n}>{n < 120 ? `${n}s` : `${n / 60} min`}</option>)}
+              </select>
+            </label>
+            <label className="field col">
+              <span>Watched repos <span className="muted small">one <code>owner/repo</code> per line</span></span>
+              <textarea rows={3} defaultValue={s.watchedRepos.join("\n")} onChange={(e) => set({ watchedRepos: lines(e.target.value) })} />
+            </label>
+          </section>
+
+          <section>
+            <h3>Repositories</h3>
+            <p className="muted small">Reviews run in a throwaway git worktree of your local clone, at the PR head. Clones are found by scanning these folders two levels deep.</p>
+            <label className="field col">
+              <span>Folders to scan <span className="muted small">one per line</span></span>
+              <textarea rows={2} defaultValue={s.repoRoots.join("\n")} onChange={(e) => set({ repoRoots: lines(e.target.value) })} />
+            </label>
+            <details>
+              <summary>{found ? `${Object.keys(found).length} clones found` : "Scanning…"}</summary>
+              <ul className="repo-list">
+                {found && Object.entries(found).map(([r, p]) => <li key={r}><code>{r}</code> <span className="muted small">{p}</span></li>)}
+              </ul>
+            </details>
+            <div className="field col">
+              <span>Overrides</span>
+              {Object.entries(s.repoPaths).map(([r, p]) => (
+                <div key={r} className="row">
+                  <code>{r}</code> → <span className="muted small">{p}</span>
+                  <button className="link danger" onClick={() => { const rp = { ...s.repoPaths }; delete rp[r]; set({ repoPaths: rp }); }}>remove</button>
+                </div>
+              ))}
+              <div className="row">
+                <input placeholder="owner/repo" value={overrideRepo} onChange={(e) => setOverrideRepo(e.target.value)} />
+                <input placeholder="~/path/to/clone" value={overridePath} onChange={(e) => setOverridePath(e.target.value)} />
+                <button disabled={!overrideRepo || !overridePath}
+                  onClick={() => { set({ repoPaths: { ...s.repoPaths, [overrideRepo.trim().toLowerCase()]: overridePath.trim() } }); setOverrideRepo(""); setOverridePath(""); }}>Add</button>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3>Claude</h3>
+            <label className="field">
+              <span>Review command</span>
+              <input value={s.reviewCommand} onChange={(e) => set({ reviewCommand: e.target.value })} />
+            </label>
+            <p className="muted small">Sent as the prompt to <code>claude -p</code>. <code>{"{url}"}</code>, <code>{"{number}"}</code> and <code>{"{repo}"}</code> are filled in. The app tells Claude to stop before posting, pushing or fixing.</p>
+            <label className="field">
+              <span>Permission mode</span>
+              <select value={s.permissionMode} onChange={(e) => set({ permissionMode: e.target.value })}>
+                <option value="auto">auto — classifier approves safe actions</option>
+                <option value="acceptEdits">acceptEdits</option>
+                <option value="dontAsk">dontAsk — deny anything not pre-allowed</option>
+                <option value="bypassPermissions">bypassPermissions — no checks</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Review model</span>
+              <input placeholder="default" value={s.reviewModel} onChange={(e) => set({ reviewModel: e.target.value })} />
+            </label>
+            <label className="field">
+              <span>Explain model</span>
+              <input placeholder="default (e.g. sonnet for speed)" value={s.insightsModel} onChange={(e) => set({ insightsModel: e.target.value })} />
+            </label>
+            <label className="field">
+              <span>claude binary</span>
+              <input placeholder="found on PATH" value={s.claudePath} onChange={(e) => set({ claudePath: e.target.value })} />
+            </label>
+            <label className="check"><input type="checkbox" checked={s.autoInsights} onChange={(e) => set({ autoInsights: e.target.checked })} /> Explain new review requests automatically, so the walkthrough is ready when you open them</label>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}

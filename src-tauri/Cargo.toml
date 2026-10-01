@@ -1,6 +1,6 @@
 [package]
 name = "pr-review"
-version = "0.3.0"
+version = "0.3.1"
 description = "Menu-bar PR monitor and reviewer"
 authors = ["Chris Cole"]
 edition = "2021"

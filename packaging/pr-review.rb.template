@@ -5,16 +5,17 @@ cask "pr-review" do
   version "__VERSION__"
   sha256 "__SHA256__"
 
-  # Private release asset: the GitHub API serves the file to an authenticated request.
+  # Private release asset on the tap repo: the GitHub API serves it to an authenticated request,
+  # so installing needs read access to the tap only, not to the app's source.
   # Uses HOMEBREW_GITHUB_API_TOKEN if set, otherwise the token `gh` is logged in with.
-  url "https://api.github.com/repos/ChrisColeAttensi/pr-review-app/releases/assets/__ASSET_ID__",
+  url "https://api.github.com/repos/ChrisColeAttensi/homebrew-tap/releases/assets/__ASSET_ID__",
       header: [
         "Accept: application/octet-stream",
         "Authorization: Bearer #{token}",
       ]
   name "PR Review"
   desc "Menu-bar PR monitor with a Claude-powered review UI"
-  homepage "https://github.com/ChrisColeAttensi/pr-review-app"
+  homepage "https://github.com/ChrisColeAttensi/homebrew-tap"
 
   depends_on arch: :arm64
   depends_on :macos

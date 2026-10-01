@@ -36,13 +36,19 @@ rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 SHA="$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
 
-echo "→ tagging and publishing"
+echo "→ tagging $REPO"
+PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 git diff --cached --quiet || git commit -qm "Release v$VERSION"
 git tag "v$VERSION"
 retry git push -q origin HEAD "v$VERSION"
-retry gh release create "v$VERSION" "$ZIP" -R "$REPO" --title "v$VERSION" --generate-notes >/dev/null
-ASSET_ID="$(gh api "repos/$REPO/releases/tags/v$VERSION" --jq '.assets[0].id')"
+
+# The build is published on the tap, not here: installing then needs read access to the
+# tap only, and this repo (the source) stays private to whoever edits it.
+echo "→ publishing the build on $TAP"
+NOTES="$(git log --format='- %s' ${PREV_TAG:+$PREV_TAG..}HEAD | grep -v '^- Release v' || true)"
+retry gh release create "pr-review-v$VERSION" "$ZIP" -R "$TAP" --title "PR Review $VERSION" --notes "${NOTES:-Release $VERSION}" >/dev/null
+ASSET_ID="$(gh api "repos/$TAP/releases/tags/pr-review-v$VERSION" --jq '.assets[0].id')"
 
 echo "→ updating cask in $TAP"
 TAPDIR="$(mktemp -d)"

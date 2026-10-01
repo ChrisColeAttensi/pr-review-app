@@ -17,7 +17,7 @@ A macOS menu-bar app that watches your GitHub pull requests and gives you a revi
 
 You need an **Apple Silicon Mac** and Homebrew. Then:
 
-1. **Repo access:** read access to the two private repos, [`pr-review-app`](https://github.com/ChrisColeAttensi/pr-review-app) and [`homebrew-tap`](https://github.com/ChrisColeAttensi/homebrew-tap). Ask Chris to add you.
+1. **Repo access:** read access to the private [`homebrew-tap`](https://github.com/ChrisColeAttensi/homebrew-tap) repo. It holds the install recipe and the built app, so that's all installing needs. Ask Chris to add you. This repo, the source, is only needed if you want to work on the app.
 2. **GitHub CLI:** install it and sign in with the account that has that access:
    ```bash
    brew install gh
@@ -53,7 +53,7 @@ Homebrew 7+ only installs from taps you have trusted, which is what `brew trust`
 
 Open **PR Review** from Applications. It appears in the menu bar. Then turn on **Settings → General → Launch at login**.
 
-The cask downloads a private GitHub release using your `gh` login, or `HOMEBREW_GITHUB_API_TOKEN` if that's set. The app isn't signed with an Apple Developer ID, so the cask clears macOS's download quarantine flag for you.
+The cask downloads the build from a private release on `homebrew-tap`, using your `gh` login, or `HOMEBREW_GITHUB_API_TOKEN` if that's set. The app isn't signed with an Apple Developer ID, so the cask clears macOS's download quarantine flag for you.
 
 ### 3. Set it up
 
@@ -106,7 +106,7 @@ bun run tauri dev
 scripts/release.sh 0.4.0
 ```
 
-This bumps the version, builds the app, publishes a GitHub release with the zipped app, and updates the cask in `homebrew-tap`. Users get it with `brew upgrade`.
+This bumps the version and tags it here, builds the app, publishes the zip as a release on `homebrew-tap` (not on this repo, so installers never need access to the source), and points the cask at it. Users get it with `brew upgrade`.
 
 ## How it works
 

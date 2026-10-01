@@ -1,55 +1,112 @@
 # PR Review
 
-Menu-bar app that watches GitHub PRs, notifies you, and gives you a review UI backed by Claude.
+A macOS menu-bar app that watches your GitHub pull requests and gives you a review UI backed by Claude.
 
-- **Monitors** (each toggle-able, with separate notify toggles in Settings): review requested from me, new commits on PRs I reviewed, my own PRs (CI result, incoming reviews), and all PRs in watched repos. Menu-bar badge = PRs waiting on you.
-- **Explain changes**: runs `claude -p` with a JSON schema. You get a summary, a risk rating, the diff reordered as chapters, and inline notes on hunks (what / why / concern / question) in the Walkthrough and Files tabs.
-- **Run pr-review**: runs your `/chriscole-skills:pr-review` skill headless, in a throwaway git worktree at the PR head. It stops before step 8, so nothing is posted, pushed or fixed. The report shows up in the pr-review tab.
-- **My notes**: click any line number to leave a private note. Notes stay on your machine; you can copy one, or copy them all as markdown.
+- **Menu bar:** what needs you right now. Review requests show how far along each one is (🛠 issues found, ✅ reviewed, ⏳ Claude working, ✦ explained, ○ not started), and your own PRs show their next step (🟢 ready to merge, 🟠 changes requested, 🔴 CI failing). The badge counts review requests.
+- **Notifications:** new review requests, CI results and reviews on your PRs, and new PRs in watched repos. Each kind can be switched on or off.
+- **Explain changes:** Claude reads the diff and the code around it. You get a summary and a risk rating, the diff retold as chapters in reading order, and inline notes on what each hunk does and why.
+- **Run pr-review:** runs the [`pr-review` skill](https://github.com/ChrisColeAttensi/claude-skills) in a throwaway git worktree at the PR head. It never posts, pushes or fixes anything, and the report lands in the app. It can live-check the change in your Chrome if you tick the box.
+- **Claude tab:** carry on the review conversation, e.g. "fix the findings", "turn my notes into review comments". **Continue in Claude Desktop** opens the same session in Desktop's Code tab.
+- **Act on it:** approve, request changes, comment or merge from the app. Merge includes the admin override when your repo rules let you bypass. Afterwards, the app offers to DM the author on Slack.
+- **Private notes:** click any line number to leave a note. Notes stay on your machine.
+- **Triage:** filters for needs action only, team requests and drafts. Right-click a PR to ignore it.
 
-## Requirements
+## Install
 
-- `gh` authenticated (`gh auth status`)
-- `claude` CLI logged in (`claude` then `/login`)
-- A local clone of each repo you want pr-review to run on, under a folder listed in Settings → Repositories (default `~/Developer`)
+### 1. Prerequisites
 
-## Install (Homebrew, private)
+You need an **Apple Silicon Mac** and Homebrew. Then:
+
+1. **Repo access:** read access to the two private repos, [`pr-review-app`](https://github.com/ChrisColeAttensi/pr-review-app) and [`homebrew-tap`](https://github.com/ChrisColeAttensi/homebrew-tap). Ask Chris to add you.
+2. **GitHub CLI:** install it and sign in with the account that has that access:
+   ```bash
+   brew install gh
+   ```
+   ```bash
+   gh auth login
+   ```
+3. **Claude Code CLI:** install it, then run `claude` once and type `/login`:
+   ```bash
+   curl -fsSL https://claude.ai/install.sh | bash
+   ```
+4. **The pr-review skill**, from Chris's public skills repo:
+   ```bash
+   claude plugin marketplace add ChrisColeAttensi/claude-skills
+   ```
+   ```bash
+   claude plugin install chriscole-skills@chriscole
+   ```
+
+### 2. Install the app
 
 ```bash
 brew tap chriscoleattensi/tap https://github.com/ChrisColeAttensi/homebrew-tap
-brew install --cask pr-review
+```
+```bash
+brew install --cask chriscoleattensi/tap/pr-review
 ```
 
-Update with `brew update && brew upgrade --cask pr-review`. The cask downloads the private release asset using `HOMEBREW_GITHUB_API_TOKEN`, or your `gh` login when that isn't set.
+Open **PR Review** from Applications. It appears in the menu bar. Then turn on **Settings → General → Launch at login**.
 
-Release a new version with `scripts/release.sh 0.2.0`. It bumps the version, builds, publishes a GitHub release, and updates the cask in the tap.
+The cask downloads a private GitHub release using your `gh` login, or `HOMEBREW_GITHUB_API_TOKEN` if that's set. The app isn't signed with an Apple Developer ID, so the cask clears macOS's download quarantine flag for you.
 
-## Run
+### 3. Set it up
+
+Open **Settings** (⌘,):
+
+- **Repositories:** pr-review and Explain work best with a local clone of the repo. The app finds clones under `~/Developer` by default. Add other folders, or map a repo to a path by hand.
+- **Monitoring:** choose what to show and what notifies you.
+- **Slack** (optional): connect Slack in claude.ai → Settings → Connectors. Check that `claude mcp list` shows `claude.ai Slack … Connected`, then use **Send test message to myself**. Messages go out as you. No Slack app or admin approval is needed.
+- **Live check in Chrome** (optional): needs the [Claude in Chrome](https://claude.ai/chrome) extension.
+
+### Update
+
+```bash
+brew update && brew upgrade --cask pr-review
+```
+
+### Uninstall
+
+```bash
+brew uninstall --zap --cask pr-review
+```
+
+`--zap` also removes the app's data and its login item.
+
+## Using it
+
+| Where | What |
+| --- | --- |
+| Menu bar | Click a PR to open it in the app. |
+| Sidebar | `j` / `k` to move, `/` to filter, right-click for Ignore, Open on GitHub, Explain, Run pr-review. |
+| PR tabs | Overview · Walkthrough · Files · pr-review · My notes · Claude (`⌘1`–`⌘6`) |
+| Header | Review… (approve / request changes / comment), Merge…, Explain, Run pr-review. Buttons show a time and cost estimate learned from your own past runs. |
+
+Claude runs use **your** `claude` login and plan, so they count against your usage. The time and cost estimates are learned from your own past runs.
+
+## Develop
 
 ```bash
 bun install
-bun run tauri dev          # dev
-bun run tauri build --bundles app   # → src-tauri/target/release/bundle/macos/PR Review.app
+```
+```bash
+bun run tauri dev
 ```
 
-`bun run dev` alone serves the UI in a normal browser with a mocked backend. It reads fixtures from `src/dev/fixtures/` (gitignored).
+`bun run dev` serves the UI in a normal browser with a mocked backend. It reads fixtures from `src/dev/fixtures/`, which is gitignored.
 
-## Launch at login
+### Release
 
-Settings → General → **Launch at login** registers a LaunchAgent; login launches start hidden in the menu bar (`--hidden`). Enable it from the built `.app`, not `tauri dev`, or it will point at the debug binary.
+```bash
+scripts/release.sh 0.4.0
+```
 
-## Worktree cleanup
+This bumps the version, builds the app, publishes a GitHub release with the zipped app, and updates the cask in `homebrew-tap`. Users get it with `brew upgrade`.
 
-Each run checks the PR out into `worktrees/<owner>__<repo>-<n>`. About once an hour the app removes worktrees whose PR is merged or closed, and ones unused for longer than the retention setting (default 7 days; "Never" keeps them until the PR closes). Worktrees with a running job are skipped. Reports, walkthroughs and notes under `prs/` are kept. Settings → Review worktrees shows disk use and has **Clean up now** and **Remove all**.
+## How it works
 
-## Slack
-
-After you approve or merge someone else's PR, the app offers to DM the author. It matches them by the email on their commits, and shows who it found before you send. Messages go out as you through your **claude.ai Slack connector** (check `claude mcp list`), via a tiny Haiku run that may call only the Slack tool it needs. No Slack app or admin approval is needed. Confirmed matches are remembered in `slack-users.json`. Settings → Slack has the toggles, message templates, and a self-test.
-
-## Keys
-
-`j`/`k` next/prev PR · `/` filter · `⌘1–5` tabs · `⌘R` refresh · `⌘,` settings
-
-## Data
-
-`~/Library/Application Support/com.chriscole.prreview/`: `settings.json`, `seen.json` (notification state), `prs/<repo>-<n>/` (review.md, insights.json, drafts.json), `worktrees/`.
+- **GitHub:** everything goes through `gh` (GraphQL search plus `gh pr …`). The app polls every 2 minutes by default.
+- **Claude:** headless `claude -p` runs. pr-review and Explain run in `worktrees/<owner>__<repo>-<n>`. Chat resumes the same session there. Uncommitted chat edits are stashed, never lost, if the worktree is re-checked out.
+- **Slack:** a short Haiku run that may call only the Slack tool it needs. Matches are found by commit email and remembered.
+- **Cleanup:** worktrees are removed once their PR closes, or after a retention period (Settings → Review worktrees).
+- **Data:** `~/Library/Application Support/com.chriscole.prreview/` holds settings, notification state, per-PR reports, notes and chats, run history, Slack matches and worktrees.

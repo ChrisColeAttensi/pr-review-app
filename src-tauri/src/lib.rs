@@ -1,11 +1,13 @@
 mod cleanup;
 mod github;
+mod ignore;
 mod jobs;
 mod repos;
 mod settings;
 mod shell;
 mod slack;
 mod store;
+mod tray;
 
 use github::Pr;
 use serde::{Deserialize, Serialize};
@@ -16,9 +18,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent, Wry};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_notification::NotificationExt;
 
@@ -79,6 +81,9 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
             draft: pr.is_draft,
         };
         seen.insert(pr.key.clone(), now);
+        if pr.ignored || (pr.team_only && s.direct_requests_only) {
+            continue;
+        }
         if first_run || !s.notifications || (pr.is_draft && !s.show_drafts) {
             continue;
         }
@@ -130,84 +135,8 @@ fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &m
     }
     if s.auto_insights {
         for pr in new_requests {
-            let _ = jobs::start(app.clone(), pr.repo.clone(), pr.number, "insights".into(), None);
+            let _ = jobs::start(app.clone(), pr.repo.clone(), pr.number, "insights".into(), None, false);
         }
-    }
-}
-
-fn visible(p: &Pr, s: &Settings) -> bool {
-    (s.show_drafts || !p.is_draft) && (!s.actionable_only || p.needs_action)
-}
-
-fn attention_count(prs: &[Pr], s: &Settings) -> usize {
-    prs.iter()
-        .filter(|p| visible(p, s) && p.categories.iter().any(|c| c == "reviewRequested"))
-        .count()
-}
-
-fn short_title(p: &Pr) -> String {
-    let t = &p.title;
-    let t = if t.chars().count() > 48 { t.chars().take(47).collect::<String>() + "…" } else { t.clone() };
-    format!("{t}  ({}#{})", p.repo.split('/').last().unwrap_or(""), p.number)
-}
-
-fn approval_mark(p: &Pr) -> String {
-    let mark = match github::approval(p) {
-        "APPROVED" => "✅",
-        "CHANGES_REQUESTED" => "❌",
-        _ => "⏳",
-    };
-    if github::ci_failed(p) { format!("{mark}🔴") } else { mark.to_string() }
-}
-
-fn rebuild_tray(app: &AppHandle, snap: &Snapshot, s: &Settings) {
-    let Some(tray) = app.tray_by_id("main") else { return };
-    let n = attention_count(&snap.prs, s);
-    let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
-    let _ = tray.set_tooltip(Some(format!("PR Review — {n} review requests")));
-
-    let has = |p: &Pr, c: &str| p.categories.iter().any(|x| x == c);
-    let build = || -> tauri::Result<Menu<Wry>> {
-        let item = |id: String, text: String, enabled: bool| MenuItem::with_id(app, id, text, enabled, None::<&str>);
-        let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![
-            Box::new(item("open".into(), "Open PR Review".into(), true)?),
-            Box::new(item("refresh".into(), "Refresh now".into(), true)?),
-        ];
-        let mut section = |title: &str, rows: Vec<(String, String)>, empty: &str| -> tauri::Result<()> {
-            items.push(Box::new(PredefinedMenuItem::separator(app)?));
-            items.push(Box::new(item(format!("h:{title}"), title.to_string(), false)?));
-            if rows.is_empty() {
-                items.push(Box::new(item(format!("e:{title}"), format!("   {empty}"), false)?));
-            }
-            for (key, text) in rows {
-                items.push(Box::new(item(format!("pr:{key}"), text, true)?));
-            }
-            Ok(())
-        };
-        let requested: Vec<(String, String)> = snap
-            .prs
-            .iter()
-            .filter(|p| visible(p, s) && has(p, "reviewRequested"))
-            .take(12)
-            .map(|p| (p.key.clone(), format!("   {}", short_title(p))))
-            .collect();
-        section("Review requested", requested, "Nothing waiting on you")?;
-        let mine: Vec<(String, String)> = snap
-            .prs
-            .iter()
-            .filter(|p| visible(p, s) && has(p, "mine"))
-            .take(12)
-            .map(|p| (p.key.clone(), format!("{} {}", approval_mark(p), short_title(p))))
-            .collect();
-        section("My PRs", mine, if s.actionable_only { "Nothing to act on" } else { "No open PRs" })?;
-        items.push(Box::new(PredefinedMenuItem::separator(app)?));
-        items.push(Box::new(MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?));
-        items.push(Box::new(MenuItem::with_id(app, "quit", "Quit PR Review", true, Some("Cmd+Q"))?));
-        let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|b| b.as_ref()).collect();
-        Menu::with_items(app, &refs)
-    };
-    if let Ok(menu) = build() {
-        let _ = tray.set_menu(Some(menu));
     }
 }
 
@@ -228,7 +157,8 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
                 snap.loading = true;
                 let _ = app.emit("prs-updated", snap.clone());
             }
-            let res = github::fetch_all(&s);
+            let mut res = github::fetch_all(&s);
+            ignore::apply(&state.data_dir, &mut res.prs);
             if res.errors.is_empty() || !res.prs.is_empty() {
                 diff_and_notify(&app, &s, &res.me, &res.prs, &mut seen, first_run);
                 first_run = false;
@@ -246,10 +176,7 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
                 snap.clone()
             };
             let _ = app.emit("prs-updated", snap.clone());
-            let app2 = app.clone();
-            let tray_snap = snap.clone();
-            let tray_settings = state.settings.lock().unwrap().clone();
-            let _ = app.run_on_main_thread(move || rebuild_tray(&app2, &tray_snap, &tray_settings));
+            tray::refresh(&app);
 
             if !snap.loading && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
                 last_cleanup = Some(Instant::now());
@@ -361,8 +288,8 @@ fn save_drafts(state: tauri::State<AppState>, repo: String, number: u64, drafts:
 }
 
 #[tauri::command]
-fn start_job(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>) -> Result<jobs::JobInfo, String> {
-    jobs::start(app, repo, number, kind, message)
+fn start_job(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>, chrome: Option<bool>) -> Result<jobs::JobInfo, String> {
+    jobs::start(app, repo, number, kind, message, chrome.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -442,11 +369,11 @@ async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result
 }
 
 #[tauri::command]
-async fn slack_lookup(app: AppHandle, repo: String, number: u64, login: String) -> Result<slack::Lookup, String> {
+async fn slack_lookup(app: AppHandle, repo: String, number: u64, login: String, force: Option<bool>) -> Result<slack::Lookup, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap().clone();
-        slack::lookup(&s, &state.data_dir, &repo, number, &login)
+        slack::lookup(&s, &state.data_dir, &repo, number, &login, force.unwrap_or(false))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -540,6 +467,21 @@ fn handoff(app: AppHandle, repo: String, number: u64, target: String, url: Strin
 }
 
 #[tauri::command]
+fn set_ignored(app: AppHandle, key: String, title: String, ignored: bool) {
+    let state = app.state::<AppState>();
+    ignore::set(&state.data_dir, &key, &title, ignored);
+    let snap = {
+        let mut snap = state.snapshot.lock().unwrap();
+        for p in snap.prs.iter_mut().filter(|p| p.key == key) {
+            p.ignored = ignored;
+        }
+        snap.clone()
+    };
+    let _ = app.emit("prs-updated", snap);
+    tray::refresh(&app);
+}
+
+#[tauri::command]
 fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
@@ -574,6 +516,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let s = settings::load(&settings_path(&data_dir));
+            slack::init(&data_dir);
             let (tx, rx) = channel();
             app.manage(AppState {
                 settings: Arc::new(Mutex::new(s)),
@@ -655,6 +598,7 @@ pub fn run() {
             slack_send,
             slack_forget,
             pr_chat,
+            set_ignored,
             pr_index,
             handoff,
             slack_test,

@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { JobsProvider } from "./jobs";
+import { JobsProvider, useJobs } from "./jobs";
+import { ToastsProvider } from "./toasts";
+import { SlackPrompt, type SlackReason } from "./components/SlackPrompt";
 import { orderedPrs, Sidebar, type ViewFilter } from "./components/Sidebar";
 import { PrView, type Tab } from "./components/PrView";
 import { SettingsDialog } from "./components/SettingsDialog";
-import type { Snapshot } from "./types";
+import type { Pr, Snapshot } from "./types";
 import "react-diff-view/style/index.css";
 import "./App.css";
 
 const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "review", "notes", "claude"];
+
+function SlackHost({ offer, onClose }: { offer?: { pr: Pr; reason: SlackReason }; onClose: () => void }) {
+  const { settings } = useJobs();
+  if (!offer || !settings) return null;
+  return <SlackPrompt pr={offer.pr} reason={offer.reason} settings={settings} onClose={onClose} />;
+}
 
 export default function App() {
   const [snap, setSnap] = useState<Snapshot>({ me: "", prs: [], errors: [], fetchedAt: 0, loading: true });
@@ -17,15 +25,18 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [view, setViewState] = useState<ViewFilter>({ actionableOnly: true, showDrafts: false });
+  const [slack, setSlack] = useState<{ pr: Pr; reason: SlackReason }>();
+  const [view, setViewState] = useState<ViewFilter>({ actionableOnly: true, showDrafts: false, hideTeam: false });
   // Stored in settings so the tray menu and notifications follow the same filter.
   const setView = async (v: ViewFilter) => {
     setViewState(v);
     const s = await api.settings();
-    await api.saveSettings({ ...s, ...v });
+    const saved = { actionableOnly: v.actionableOnly, showDrafts: v.showDrafts, directRequestsOnly: v.hideTeam };
+    if (s.actionableOnly !== saved.actionableOnly || s.showDrafts !== saved.showDrafts || s.directRequestsOnly !== saved.directRequestsOnly)
+      await api.saveSettings({ ...s, ...saved });
   };
   useEffect(() => {
-    if (!settingsOpen) api.settings().then((s) => setViewState({ actionableOnly: s.actionableOnly, showDrafts: s.showDrafts }));
+    if (!settingsOpen) api.settings().then((s) => setViewState((v) => ({ ...v, actionableOnly: s.actionableOnly, showDrafts: s.showDrafts, hideTeam: s.directRequestsOnly })));
   }, [settingsOpen]);
 
   useEffect(() => {
@@ -64,6 +75,7 @@ export default function App() {
   }, [ordered, selected]);
 
   return (
+    <ToastsProvider>
     <JobsProvider>
       <div className="app">
         <Sidebar
@@ -79,7 +91,7 @@ export default function App() {
         />
         <main className="main">
           {pr ? (
-            <PrView key={pr.key} pr={pr} me={snap.me} tab={tab} setTab={setTab} />
+            <PrView key={pr.key} pr={pr} me={snap.me} tab={tab} setTab={setTab} onSlack={(p, reason) => setSlack({ pr: p, reason })} />
           ) : (
             <div className="empty" data-tauri-drag-region>
               <p className="muted">{snap.loading ? "Fetching pull requests…" : "Select a pull request."}</p>
@@ -87,7 +99,9 @@ export default function App() {
           )}
         </main>
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+        <SlackHost offer={slack} onClose={() => setSlack(undefined)} />
       </div>
     </JobsProvider>
+    </ToastsProvider>
   );
 }

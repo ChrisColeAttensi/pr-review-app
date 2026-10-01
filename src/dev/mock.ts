@@ -22,7 +22,7 @@ export function installMock() {
     notifyCategories: { reviewRequested: true, reReview: true, watched: false, mine: true },
     actionableOnly: true, showDrafts: false, directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
     claudePath: "", reviewCommand: "/chriscole-skills:pr-review {url}", permissionMode: "auto",
-    reviewModel: "", insightsModel: "", autoInsights: false, worktreeRetentionDays: 7,
+    reviewModel: "", insightsModel: "", autoInsights: false, liveCheckChrome: false, worktreeRetentionDays: 7,
     slackOnApprove: true, slackOnMerge: true,
     slackApproveTemplate: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍",
     slackMergeTemplate: "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀",
@@ -64,10 +64,22 @@ export function installMock() {
           [snapshot.prs[1]?.key]: { reviewHead: "old", verdict: "✅ Approve — small and safe", insightsHead: null, drafts: 0, chat: 0 },
         };
         case "handoff": return null;
+        case "set_ignored": {
+          const p = snapshot.prs.find((x: any) => x.key === args.key); if (p) p.ignored = args.ignored;
+          setTimeout(() => emit("prs-updated", { ...snapshot }), 10); return null;
+        }
         case "slack_test": return "";
         case "test_notification": return null;
         case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
-        case "merge_pr": await new Promise((r) => setTimeout(r, 600)); return "";
+        case "merge_pr": {
+          await new Promise((r) => setTimeout(r, 600));
+          // Like the real refresh: the merged PR leaves the list shortly after.
+          setTimeout(() => {
+            snapshot.prs = snapshot.prs.filter((p: any) => !(p.repo === args.request.repo && p.number === args.request.number));
+            emit("prs-updated", { ...snapshot });
+          }, 300);
+          return "";
+        }
         case "worktree_usage": return { count: 3, bytes: 1.4e9 };
         case "cleanup_worktrees": return { removed: args.everything ? ["Attensi/impact#817 (removed by you)"] : [], kept: args.everything ? 0 : 3 };
         case "run_history": return [

@@ -7,7 +7,7 @@ import type { HistoryRun } from "./estimate";
 interface JobsCtx {
   jobs: JobInfo[];
   lines: Record<string, string[]>;
-  start: (repo: string, number: number, kind: JobKind, message?: string) => Promise<void>;
+  start: (repo: string, number: number, kind: JobKind, message?: string, chrome?: boolean) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   latest: (prKey: string, kind: JobKind) => JobInfo | undefined;
   /** Bumped whenever a job finishes, so views can reload their PR state. */
@@ -88,10 +88,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       history,
       settings,
       error,
-      start: async (repo, number, kind, message) => {
+      start: async (repo, number, kind, message, chrome) => {
         setError(undefined);
         try {
-          const j = await api.startJob(repo, number, kind, message);
+          const j = await api.startJob(repo, number, kind, message, chrome);
           setJobs((js) => [...js.filter((x) => x.id !== j.id), j]);
         } catch (e) {
           setError(String(e));

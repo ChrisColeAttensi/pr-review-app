@@ -32,6 +32,9 @@ export interface Pr {
   categories: Category[];
   needsReReview: boolean;
   needsAction: boolean;
+  ignored?: boolean;
+  teamOnly?: boolean;
+  viaTeams?: string[];
 }
 
 export interface Snapshot {
@@ -66,6 +69,7 @@ export interface Settings {
   reviewModel: string;
   insightsModel: string;
   autoInsights: boolean;
+  liveCheckChrome: boolean;
   worktreeRetentionDays: number;
   slackOnApprove: boolean;
   slackOnMerge: boolean;

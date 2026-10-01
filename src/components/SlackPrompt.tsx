@@ -2,6 +2,32 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SlackUser } from "../api";
 import type { Pr, Settings } from "../types";
+import { useToasts } from "../toasts";
+
+/** Send without blocking: a toast tracks it, with Retry and Copy if it fails. */
+function sendInBackground(toasts: ReturnType<typeof useToasts>, login: string, user: SlackUser, message: string, replace?: number) {
+  const first = user.name.split(/\s+/)[0];
+  const id = toasts.show({ text: `Sending Slack message to ${first}…`, tone: "info", busy: true }, replace);
+  api.slackSend(login, user, message).then(
+    (link) =>
+      toasts.show(
+        { text: `Sent to ${first} on Slack ✓`, tone: "ok", actions: link ? [{ label: "Open in Slack", run: () => openUrl(link) }] : [] },
+        id,
+      ),
+    (e) =>
+      toasts.show(
+        {
+          text: `Couldn't message ${first}: ${String(e)}`,
+          tone: "error",
+          actions: [
+            { label: "Retry", run: () => sendInBackground(toasts, login, user, message) },
+            { label: "Copy message", run: () => navigator.clipboard.writeText(message) },
+          ],
+        },
+        id,
+      ),
+  );
+}
 
 export type SlackReason = "approve" | "merge";
 
@@ -20,16 +46,15 @@ export function SlackPrompt({ pr, reason, settings, onClose }: {
   const template = reason === "approve" ? settings.slackApproveTemplate : settings.slackMergeTemplate;
   const [user, setUser] = useState<SlackUser>();
   const [cached, setCached] = useState(false);
-  const [phase, setPhase] = useState<"finding" | "found" | "missing" | "sending" | "sent" | "error">("finding");
+  const [phase, setPhase] = useState<"finding" | "found" | "missing" | "error">("finding");
   const [err, setErr] = useState<string>();
   const [message, setMessage] = useState(fill(template, pr));
   const [edited, setEdited] = useState(false);
-  const [link, setLink] = useState<string>();
 
-  const find = () => {
+  const find = (force = false) => {
     setPhase("finding");
     setErr(undefined);
-    api.slackLookup(pr.repo, pr.number, pr.author)
+    api.slackLookup(pr.repo, pr.number, pr.author, force)
       .then((r) => {
         setCached(r.cached);
         if (r.user) {
@@ -40,20 +65,13 @@ export function SlackPrompt({ pr, reason, settings, onClose }: {
       })
       .catch((e) => { setErr(String(e)); setPhase("error"); });
   };
-  useEffect(find, []);
+  useEffect(() => find(), []);
 
-  const send = async () => {
+  const toasts = useToasts();
+  const send = () => {
     if (!user) return;
-    setPhase("sending");
-    setErr(undefined);
-    try {
-      setLink(await api.slackSend(pr.author, user, message));
-      setPhase("sent");
-      setTimeout(onClose, 2500);
-    } catch (e) {
-      setErr(String(e));
-      setPhase("found");
-    }
+    sendInBackground(toasts, pr.author, user, message);
+    onClose();
   };
 
   const copyAndOpen = async () => {
@@ -70,33 +88,35 @@ export function SlackPrompt({ pr, reason, settings, onClose }: {
         </header>
         <div className="modal-body">
           <div className="slack-who">
-            {phase === "finding" && <><span className="spinner" /> Finding <b>{pr.author}</b> on Slack…</>}
+            {phase === "finding" && <><span className="spinner" /> Finding <b>{pr.author}</b> on Slack… <span className="muted small">only the first time; it's remembered after</span></>}
             {user && phase !== "finding" && (
               <>
                 <b>{user.name}</b>
                 {user.title && <span className="muted"> · {user.title}</span>}
                 {user.email && <span className="muted small"> · {user.email}</span>}
-                {cached && (
-                  <button className="link" onClick={() => { api.slackForget(pr.author); setUser(undefined); find(); }}>Not them?</button>
-                )}
+                <button className="link" onClick={() => { api.slackForget(pr.author); setUser(undefined); find(true); }}>Not them?</button>
               </>
             )}
-            {phase === "missing" && <span className="muted">Couldn't match {pr.author} to a Slack user. You can still copy the message.</span>}
+            {phase === "missing" && (
+              <>
+                <span className="muted">
+                  Couldn't match {pr.author} to a Slack user{cached ? " (remembered from earlier today)" : ""}. You can still copy the message.
+                </span>
+                <button className="link" onClick={() => find(true)}>Search again</button>
+              </>
+            )}
           </div>
-          <textarea rows={4} value={message} disabled={phase === "sending" || phase === "sent"}
+          <textarea rows={4} value={message} 
             onChange={(e) => { setMessage(e.target.value); setEdited(true); }}
             onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey && phase === "found") send(); }} />
-          <p className="muted small">Sent as you, through your Claude Slack connector.</p>
-          {phase === "sent" && (
-            <div className="banner ok">Sent ✓ {link && <button className="link" onClick={() => openUrl(link)}>Open in Slack</button>}</div>
-          )}
+          <p className="muted small">Sent as you, through your Claude Slack connector. It sends in the background; a toast tells you when it's done.</p>
           {err && <div className="banner error">{err}</div>}
         </div>
         <footer className="row end modal-foot">
-          <button onClick={onClose}>{phase === "sent" ? "Close" : "Skip"}</button>
-          <button onClick={copyAndOpen} disabled={phase === "sending"}>Copy & open Slack</button>
+          <button onClick={onClose}>Skip</button>
+          <button onClick={copyAndOpen}>Copy & open Slack</button>
           <button className="primary" disabled={phase !== "found" || !message.trim()} onClick={send}>
-            {phase === "sending" ? "Sending…" : "Send"}
+            Send
           </button>
         </footer>
       </div>

@@ -92,6 +92,15 @@ pub struct Pr {
     /// Waiting on me: a review request, or my PR is approved (merge it), has changes
     /// requested, or fails CI.
     pub needs_action: bool,
+    /// Hidden by the user; set by `ignore::apply` after each fetch.
+    #[serde(default)]
+    pub ignored: bool,
+    /// Requested from one of my teams but not from me by name.
+    #[serde(default)]
+    pub team_only: bool,
+    /// Teams asked to review, as `org/slug`.
+    #[serde(default)]
+    pub via_teams: Vec<String>,
 }
 
 /// `reviewDecision` is null in repos without required reviews, so fall back to the
@@ -212,6 +221,9 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
         categories: vec![],
         needs_re_review,
         needs_action: false,
+        ignored: false,
+        team_only: false,
+        via_teams: vec![],
     })
 }
 
@@ -226,8 +238,9 @@ pub fn fetch_all(settings: &Settings) -> FetchResult {
     let mut queries: Vec<(&str, String)> = vec![];
     let c = &settings.categories;
     if c.review_requested {
-        let q = if settings.direct_requests_only { "user-review-requested:@me" } else { "review-requested:@me" };
-        queries.push(("reviewRequested", format!("{base} {q}")));
+        // All requests (direct and via teams), then direct-only, to tell them apart.
+        queries.push(("reviewRequested", format!("{base} review-requested:@me")));
+        queries.push(("directRequest", format!("{base} user-review-requested:@me")));
     }
     if c.re_review {
         queries.push(("reReview", format!("{base} reviewed-by:@me -author:@me")));
@@ -271,8 +284,14 @@ pub fn fetch_all(settings: &Settings) -> FetchResult {
             Err(e) => errors.push(format!("{cat}: {e}")),
         }
     }
-    let mut prs: Vec<Pr> = by_key.into_values().collect();
+    let direct_ok = !errors.iter().any(|e| e.starts_with("directRequest"));
+    let mut prs: Vec<Pr> = by_key.into_values().filter(|p| p.categories.iter().any(|c| c != "directRequest")).collect();
     for p in &mut prs {
+        let direct = p.categories.iter().any(|c| c == "directRequest");
+        p.categories.retain(|c| c != "directRequest");
+        // Unknown if the direct search failed: never hide on a guess.
+        p.team_only = direct_ok && !direct && p.categories.iter().any(|c| c == "reviewRequested");
+        p.via_teams = p.requested_reviewers.iter().filter(|r| r.is_team).map(|r| r.name.clone()).collect();
         p.needs_action = needs_action(p);
     }
     prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));

@@ -411,7 +411,7 @@ label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .approval-changes { color: var(--del); }
 .approval-waiting { color: var(--warn); }
 
-.side-filters { display: flex; gap: 14px; padding: 0 12px 6px; font-size: 12px; color: var(--fg-muted); }
+.side-filters { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 12px 6px; font-size: 12px; color: var(--fg-muted); }
 .side-filters label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .md details { margin: 6px 0; }
 .md summary { cursor: pointer; }
@@ -467,3 +467,22 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 .chip-btn { font-size: 12px; border-radius: 14px; padding: 3px 10px; }
 .chat-input { display: flex; gap: 8px; align-items: flex-end; position: sticky; bottom: -40px; background: var(--bg); padding: 6px 0 4px; }
 .chat-input textarea { min-height: 60px; }
+
+.pr-item.ignored { opacity: 0.5; }
+.pr-item.ignored:hover { opacity: 0.8; }
+.live-check { margin: 0 0 10px; }
+
+/* ---------- toasts ---------- */
+.toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; max-width: 420px; }
+.toast {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px;
+  background: var(--bg-card); border: 1px solid var(--border-strong); box-shadow: var(--shadow); font-size: 12.5px;
+  animation: toast-in 0.18s ease-out;
+}
+.toast .spinner { margin: 0; }
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-ok { border-color: color-mix(in srgb, var(--add) 45%, transparent); }
+.toast-ok .toast-text::before { content: ""; }
+.toast-error { border-color: color-mix(in srgb, var(--del) 55%, transparent); }
+.toast-x { color: var(--fg-muted); }
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }

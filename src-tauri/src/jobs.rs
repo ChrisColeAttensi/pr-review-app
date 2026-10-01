@@ -71,6 +71,12 @@ Do NOT do step 8: never post or draft GitHub comments, never push, never edit or
 Where a step would ask the user something, take the default the skill recommends and say so in one line in the report. \
 The working directory is a throwaway worktree checked out at the PR head.";
 
+const CHROME_NOTE: &str = "The user switched on live checks for this run and Claude in Chrome is connected: \
+treat any live-check pass the skill or the repo's review profile describes (including ones marked ask-first) as approved, \
+and name Claude in Chrome as the driver in the live checker's brief, since the built-in browser is not available here. \
+Stay on the app under test (local dev server or the PR's preview deploy) in a tab of your own, and never sign in, \
+submit forms that send real data, or change account settings.";
+
 pub fn insights_schema() -> Value {
     json!({
       "type": "object",
@@ -181,9 +187,10 @@ fn finish(app: &AppHandle, jobs: &Jobs, id: &str, status: &str, error: Option<St
         })
     });
     let _ = app.emit("job-done", json!({ "jobId": id, "status": status, "error": error, "job": info }));
+    crate::tray::refresh(app);
 }
 
-pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>) -> Result<JobInfo, String> {
+pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>, chrome: bool) -> Result<JobInfo, String> {
     let state = app.state::<AppState>();
     let jobs = state.jobs.clone();
     {
@@ -210,12 +217,13 @@ pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: O
         Job { info: info.clone(), pid: None, lines: vec![] },
     );
     let _ = app.emit("job-started", &info);
+    crate::tray::refresh(&app);
 
     let settings: Settings = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let data_dir = state.data_dir.clone();
     let app2 = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = run(&app2, &jobs, &id, &settings, &data_dir, &repo, number, &kind, message.as_deref()) {
+        if let Err(e) = run(&app2, &jobs, &id, &settings, &data_dir, &repo, number, &kind, message.as_deref(), chrome) {
             emit_line(&app2, &jobs, &id, json!({ "type": "app_error", "message": e }).to_string());
             if kind == "chat" {
                 store::push_chat(&data_dir, &repo, number, store::ChatMessage { role: "error".into(), text: e.clone(), ts: now_ms() });
@@ -241,6 +249,7 @@ fn run(
     number: u64,
     kind: &str,
     message: Option<&str>,
+    chrome: bool,
 ) -> Result<(), String> {
     let started = now_ms();
     if kind == "chat" {
@@ -311,7 +320,8 @@ fn run(
             .replace("{url}", &url)
             .replace("{number}", &number.to_string())
             .replace("{repo}", repo);
-        args.extend(["-p".into(), prompt, "--append-system-prompt".into(), HEADLESS_NOTE.into()]);
+        let note = if chrome { format!("{HEADLESS_NOTE} {CHROME_NOTE}") } else { HEADLESS_NOTE.to_string() };
+        args.extend(["-p".into(), prompt, "--append-system-prompt".into(), note]);
         model = settings.review_model.clone();
     } else if kind == "chat" {
         let text = message.unwrap_or_default();
@@ -343,6 +353,10 @@ fn run(
     ]);
     if !model.trim().is_empty() {
         args.extend(["--model".into(), model.clone()]);
+    }
+    if chrome {
+        args.push("--chrome".into());
+        progress(app, jobs, id, "Live checks enabled through Claude in Chrome");
     }
 
     if jobs.lock().ok().and_then(|m| m.get(id).map(|j| j.info.status == "cancelled")).unwrap_or(false) {

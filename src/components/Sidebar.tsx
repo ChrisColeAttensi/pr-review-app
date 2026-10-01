@@ -3,6 +3,8 @@ import { timeAgo } from "../api";
 import { useJobs } from "../jobs";
 import { useEffect } from "react";
 import { api } from "../api";
+import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Category, IndexEntry, Pr, Snapshot } from "../types";
 
 export const SECTIONS: { id: Category; label: string }[] = [
@@ -36,10 +38,10 @@ function verdictChip(v: string): { text: string; tone: string } {
 }
 
 function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
-  if (!e) return null;
+  if (!e) e = { drafts: 0, chat: 0 };
   const chip = e.verdict ? verdictChip(e.verdict) : null;
   const stale = !!e.reviewHead && e.reviewHead !== p.headSha;
-  if (!chip && !e.insightsHead && !e.drafts && !e.chat) return null;
+  if (!chip && !e.insightsHead && !e.drafts && !e.chat && !p.teamOnly) return null;
   return (
     <div className="pr-flags">
       {chip && (
@@ -48,6 +50,7 @@ function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
         </span>
       )}
       {e.insightsHead && <span className="flag" title={e.insightsHead === p.headSha ? "Explained" : "Explained (new commits since)"}>✦</span>}
+      {p.teamOnly && <span className="flag" title={`Requested from your team${(p.viaTeams ?? []).length ? ": " + p.viaTeams!.join(", ") : ""}`}>👥 {(p.viaTeams ?? [])[0]?.split("/").pop() ?? "team"}</span>}
       {e.drafts > 0 && <span className="flag" title={`${e.drafts} private notes`}>✎ {e.drafts}</span>}
       {e.chat > 0 && <span className="flag" title="Claude conversation">💬</span>}
     </div>
@@ -62,10 +65,15 @@ export function sectionOf(pr: Pr): Category {
 export interface ViewFilter {
   actionableOnly: boolean;
   showDrafts: boolean;
+  /** Saved as settings.directRequestsOnly. */
+  hideTeam: boolean;
+  /** Local only: ignored PRs never reach the tray or notifications. */
+  showIgnored?: boolean;
 }
 
-/** Same rule as the tray menu. */
-export const isVisible = (p: Pr, v: ViewFilter) => (v.showDrafts || !p.isDraft) && (!v.actionableOnly || p.needsAction);
+/** Same rule as the tray menu, plus the local "show ignored" escape hatch. */
+export const isVisible = (p: Pr, v: ViewFilter) =>
+  (v.showIgnored ? true : !p.ignored) && !(v.hideTeam && p.teamOnly) && (v.showDrafts || !p.isDraft) && (!v.actionableOnly || p.needsAction || !!p.ignored);
 
 export function orderedPrs(prs: Pr[], filter: string, view: ViewFilter): Pr[] {
   const f = filter.toLowerCase();
@@ -74,12 +82,35 @@ export function orderedPrs(prs: Pr[], filter: string, view: ViewFilter): Pr[] {
   return SECTIONS.flatMap((s) => prs.filter((p) => sectionOf(p) === s.id && match(p)));
 }
 
+async function showContextMenu(p: Pr, start: (kind: "review" | "insights") => void) {
+  try {
+    const menu = await Menu.new({
+      items: [
+        await MenuItem.new({
+          text: p.ignored ? "Stop ignoring" : "Ignore this PR",
+          action: () => api.setIgnored(p.key, p.title, !p.ignored),
+        }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({ text: "Open on GitHub", action: () => openUrl(p.url) }),
+        await MenuItem.new({ text: "Copy link", action: () => navigator.clipboard.writeText(p.url) }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({ text: "Explain changes", action: () => start("insights") }),
+        await MenuItem.new({ text: "Run pr-review", action: () => start("review") }),
+      ],
+    });
+    await menu.popup();
+  } catch {
+    // Browser preview has no native menus.
+  }
+}
+
 export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filter, setFilter, view, setView }: {
   view: ViewFilter; setView: (v: ViewFilter) => void;
   snap: Snapshot; selected?: string; onSelect: (k: string) => void; onSettings: () => void; onRefresh: () => void;
   filter: string; setFilter: (s: string) => void;
 }) {
-  const { jobs, finishedTick } = useJobs();
+  const { jobs, finishedTick, start } = useJobs();
+  const ignoredCount = snap.prs.filter((p) => p.ignored).length;
   const [index, setIndex] = useState<Record<string, IndexEntry>>({});
   useEffect(() => {
     api.index().then(setIndex).catch(() => {});
@@ -106,7 +137,11 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
       </div>
       <div className="side-filters">
         <label><input type="checkbox" checked={view.actionableOnly} onChange={(e) => setView({ ...view, actionableOnly: e.target.checked })} /> Needs action only</label>
+        <label title="Requests that reach you only through a team"><input type="checkbox" checked={!view.hideTeam} onChange={(e) => setView({ ...view, hideTeam: !e.target.checked })} /> Team requests</label>
         <label><input type="checkbox" checked={view.showDrafts} onChange={(e) => setView({ ...view, showDrafts: e.target.checked })} /> Show drafts</label>
+        {(ignoredCount > 0 || view.showIgnored) && (
+          <label><input type="checkbox" checked={!!view.showIgnored} onChange={(e) => setView({ ...view, showIgnored: e.target.checked })} /> Ignored ({ignoredCount})</label>
+        )}
       </div>
       <div className="side-list">
         {SECTIONS.map((s) => {
@@ -120,10 +155,13 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
               </div>
               {!collapsed[s.id] &&
                 items.map((p) => (
-                  <div key={p.key} className={`pr-item ${selected === p.key ? "sel" : ""}`} onClick={() => onSelect(p.key)}>
+                  <div key={p.key} className={`pr-item ${selected === p.key ? "sel" : ""} ${p.ignored ? "ignored" : ""}`}
+                    onClick={() => onSelect(p.key)}
+                    onContextMenu={(e) => { e.preventDefault(); showContextMenu(p, (k) => start(p.repo, p.number, k)); }}>
                     <img className="avatar" src={p.authorAvatar} alt="" />
                     <div className="pr-item-main">
                       <div className="pr-item-title">
+                        {p.ignored && <span className="badge tiny">ignored</span>}
                         {p.isDraft && <span className="badge tiny">draft</span>}
                         {p.title}
                       </div>

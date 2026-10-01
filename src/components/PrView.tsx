@@ -9,7 +9,7 @@ import { Markdown } from "./Markdown";
 import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
 import { ReviewButton, ReviewDialog } from "./ReviewDialog";
-import { SlackPrompt, type SlackReason } from "./SlackPrompt";
+import type { SlackReason } from "./SlackPrompt";
 import { ChatTab } from "./ChatTab";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
@@ -41,7 +41,11 @@ function useViewType() {
   return [v, set] as const;
 }
 
-export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; setTab: (t: Tab) => void }) {
+export function PrView({ pr, me, tab, setTab, onSlack }: {
+  pr: Pr; me: string; tab: Tab; setTab: (t: Tab) => void;
+  /** Hosted by the app, so the prompt outlives this view (a merged PR drops out of the list). */
+  onSlack: (pr: Pr, reason: SlackReason) => void;
+}) {
   const [detail, setDetail] = useState<PrDetail>();
   const [files, setFiles] = useState<FileData[]>();
   const [state, setState] = useState<PrState>({ drafts: [] });
@@ -52,12 +56,23 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
   const [merging, setMerging] = useState(false);
   const [merged, setMerged] = useState<string>();
   const [reviewing, setReviewing] = useState(false);
-  const [slackFor, setSlackFor] = useState<SlackReason>();
+  // Per-run choice, starting from the Settings default.
+  const [liveChrome, setLiveChrome] = useState<boolean>();
+  const chrome = liveChrome ?? jobs.settings?.liveCheckChrome ?? false;
+  const runReview = () => jobs.start(pr.repo, pr.number, "review", undefined, chrome);
+  // Start the (slow, first-time) Slack lookup while the user is still writing the
+  // review, so the prompt afterwards is instant. The answer is cached on disk.
+  const prefetchSlack = (reason: SlackReason) => {
+    const s = jobs.settings;
+    if (!s || pr.author === me) return;
+    if ((reason === "approve" && s.slackOnApprove) || (reason === "merge" && s.slackOnMerge))
+      api.slackLookup(pr.repo, pr.number, pr.author).catch(() => {});
+  };
   // Only for other people's PRs, and only when enabled in Settings.
   const offerSlack = (reason: SlackReason) => {
     const s = jobs.settings;
     if (!s || pr.author === me) return;
-    if ((reason === "approve" && s.slackOnApprove) || (reason === "merge" && s.slackOnMerge)) setSlackFor(reason);
+    if ((reason === "approve" && s.slackOnApprove) || (reason === "merge" && s.slackOnMerge)) onSlack(pr, reason);
   };
 
   const reviewJob = jobs.latest(pr.key, "review");
@@ -159,8 +174,8 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
           </h1>
           <div className="row">
             <button onClick={() => openUrl(pr.url)}>Open on GitHub ↗</button>
-            <ReviewButton pr={pr} me={me} onClick={() => setReviewing(true)} />
-            <MergeButton info={merge.info} onClick={() => setMerging(true)} />
+            <ReviewButton pr={pr} me={me} onClick={() => { setReviewing(true); prefetchSlack("approve"); }} />
+            <MergeButton info={merge.info} onClick={() => { setMerging(true); prefetchSlack("merge"); }} />
             <button
               className={running("insights") ? "busy" : ""}
               onClick={() => { setTab("walkthrough"); if (!running("insights")) jobs.start(pr.repo, pr.number, "insights"); }}
@@ -171,7 +186,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
             </button>
             <button
               className={`primary ${running("review") ? "busy" : ""}`}
-              onClick={() => { setTab("review"); if (!running("review")) jobs.start(pr.repo, pr.number, "review"); }}
+              onClick={() => { setTab("review"); if (!running("review")) runReview(); }}
             >
               {running("review") ? "Reviewing…" : state.review ? "↻ Re-run pr-review" : "▶ Run pr-review"}
               {!running("review") && <Est e={est.review} />}
@@ -228,8 +243,12 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
         <MergeDialog pr={pr} info={merge.info} onClose={() => setMerging(false)}
           onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); if (m === "Merged") offerSlack("merge"); }} />
       )}
-      {slackFor && jobs.settings && (
-        <SlackPrompt pr={pr} reason={slackFor} settings={jobs.settings} onClose={() => setSlackFor(undefined)} />
+      {pr.ignored && (
+        <div className="banner warn row">
+          You're ignoring this PR: it's hidden from the menu bar and notifications.
+          <span className="spacer" />
+          <button className="link" onClick={() => api.setIgnored(pr.key, pr.title, false)}>Stop ignoring</button>
+        </div>
       )}
       {jobs.error && <div className="banner error">{jobs.error}</div>}
       {[insightsJob, reviewJob].map((j) => j?.status === "failed" && (
@@ -244,7 +263,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
 
       <div className="pr-body">
         {tab === "overview" && (
-          <Overview pr={pr} me={me} mergeCard={<MergeCard info={merge.info} err={merge.err} onMerge={() => setMerging(true)} />} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
+          <Overview pr={pr} me={me} mergeCard={<MergeCard info={merge.info} err={merge.err} onMerge={() => { setMerging(true); prefetchSlack("merge"); }} />} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
             onExplain={() => { setTab("walkthrough"); jobs.start(pr.repo, pr.number, "insights"); }} explaining={running("insights")} goto={setTab} />
         )}
 
@@ -269,6 +288,10 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
 
         {tab === "review" && (
           <div className="review-tab">
+            <label className="check live-check" title="Starts claude with --chrome so pr-review can drive the app in your Chrome for its live-check pass">
+              <input type="checkbox" checked={chrome} onChange={(e) => setLiveChrome(e.target.checked)} />
+              Live check in Chrome <span className="muted small">— lets pr-review open the app in your Chrome (Claude in Chrome) to test the change</span>
+            </label>
             {reviewJob && (reviewJob.status === "running" || reviewJob.status === "failed") && <JobLog job={reviewJob} estimate={est.review} />}
             {state.review ? (
               <div className="report card">
@@ -289,7 +312,7 @@ export function PrView({ pr, me, tab, setTab }: { pr: Pr; me: string; tab: Tab; 
                     Runs your <code>pr-review</code> skill headless in a throwaway worktree at the PR head. Nothing is posted,
                     pushed or fixed — the report lands here.
                   </p>
-                  <button className="primary" onClick={() => jobs.start(pr.repo, pr.number, "review")}>▶ Run pr-review <Est e={est.review} /></button>
+                  <button className="primary" onClick={() => runReview()}>▶ Run pr-review <Est e={est.review} /></button>
                 </div>
               )
             )}

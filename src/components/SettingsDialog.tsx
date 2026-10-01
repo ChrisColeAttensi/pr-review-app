@@ -109,7 +109,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <button onClick={() => { api.testNotification(); setNotifyMsg("Arrives in 5 seconds: switch to another app now. macOS only shows banners when PR Review is in the background. If it lands only in Notification Center, set PR Review to Banners or Alerts in System Settings → Notifications."); }}>Send test notification</button>
             </div>
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
-            <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Only requests addressed to me directly (ignore team requests)</label>
+            <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Hide review requests that only come via a team (also in the sidebar as “Team requests”)</label>
             <label className="field">
               <span>Check every</span>
               <select value={s.pollIntervalSecs} onChange={(e) => set({ pollIntervalSecs: Number(e.target.value) })}>
@@ -230,6 +230,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span>claude binary</span>
               <input placeholder="found on PATH" value={s.claudePath} onChange={(e) => set({ claudePath: e.target.value })} />
             </label>
+            <label className="check"><input type="checkbox" checked={s.liveCheckChrome} onChange={(e) => set({ liveCheckChrome: e.target.checked })} /> Live check in Chrome by default: pr-review may drive the app in your Chrome via Claude in Chrome (needs the extension running)</label>
             <label className="check"><input type="checkbox" checked={s.autoInsights} onChange={(e) => set({ autoInsights: e.target.checked })} /> Explain new review requests automatically, so the walkthrough is ready when you open them</label>
           </section>
         </div>

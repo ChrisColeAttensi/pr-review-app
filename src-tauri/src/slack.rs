@@ -8,17 +8,45 @@ use crate::shell;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Tools {
     search: String,
     send: String,
 }
 
 static TOOLS: Mutex<Option<Tools>> = Mutex::new(None);
+/// `claude mcp list` is slow (it health-checks every server), so the result is kept on disk.
+static TOOLS_FILE: OnceLock<PathBuf> = OnceLock::new();
+/// One lookup at a time: a prefetch and the prompt asking for the same person
+/// share the work instead of both paying for it.
+static LOOKUP: Mutex<()> = Mutex::new(());
+const MISS_TTL_MS: u64 = 86_400_000;
+
+pub fn init(data: &Path) {
+    let _ = TOOLS_FILE.set(data.join("slack-tools.json"));
+    if let Some(t) = TOOLS_FILE.get().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str(&s).ok()) {
+        *TOOLS.lock().unwrap() = Some(t);
+    }
+}
+
+fn remember_tools(t: &Tools) {
+    *TOOLS.lock().unwrap() = Some(t.clone());
+    if let Some(f) = TOOLS_FILE.get() {
+        let _ = std::fs::write(f, serde_json::to_string(t).unwrap_or_default());
+    }
+}
+
+/// After a failure the saved names may be stale (connector renamed or removed).
+fn forget_tools() {
+    *TOOLS.lock().unwrap() = None;
+    if let Some(f) = TOOLS_FILE.get() {
+        let _ = std::fs::remove_file(f);
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +63,7 @@ pub struct SlackUser {
 #[serde(rename_all = "camelCase")]
 pub struct Lookup {
     pub user: Option<SlackUser>,
-    /// Remembered from an earlier message, not looked up now.
+    /// Remembered from an earlier lookup, not searched now.
     pub cached: bool,
     pub emails: Vec<String>,
 }
@@ -91,7 +119,7 @@ fn tools(settings: &Settings) -> Result<Tools, String> {
         });
     };
     let t = tools_for(name);
-    *TOOLS.lock().unwrap() = Some(t.clone());
+    remember_tools(&t);
     Ok(t)
 }
 
@@ -139,7 +167,7 @@ fn run(settings: &Settings, prompt: &str, allowed: &str, schema: Value) -> Resul
                     search: format!("mcp__{server}__slack_search_users"),
                     send: format!("mcp__{server}__slack_send_message"),
                 };
-                *TOOLS.lock().unwrap() = Some(t);
+                remember_tools(&t);
                 prompt = prompt.replace(&allowed, real);
                 allowed = real.clone();
                 continue;
@@ -180,10 +208,63 @@ fn author_emails(repo: &str, number: u64, login: &str) -> Vec<String> {
     emails
 }
 
-pub fn lookup(settings: &Settings, data: &Path, repo: &str, number: u64, login: &str) -> Result<Lookup, String> {
+fn misses_path(data: &Path) -> PathBuf {
+    data.join("slack-misses.json")
+}
+
+fn load_misses(data: &Path) -> HashMap<String, u64> {
+    std::fs::read_to_string(misses_path(data)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn save_user(data: &Path, login: &str, user: &SlackUser) {
+    let mut cache = load_cache(data);
+    cache.insert(login.to_string(), user.clone());
+    let _ = std::fs::write(cache_path(data), serde_json::to_string_pretty(&cache).unwrap_or_default());
+}
+
+fn save_miss(data: &Path, login: &str) {
+    let now = crate::jobs::now_ms();
+    let mut m = load_misses(data);
+    m.retain(|_, t| now.saturating_sub(*t) < MISS_TTL_MS);
+    m.insert(login.to_string(), now);
+    let _ = std::fs::write(misses_path(data), serde_json::to_string(&m).unwrap_or_default());
+}
+
+fn cached(data: &Path, login: &str) -> Option<Lookup> {
     if let Some(u) = load_cache(data).get(login) {
-        return Ok(Lookup { user: Some(u.clone()), cached: true, emails: vec![] });
+        return Some(Lookup { user: Some(u.clone()), cached: true, emails: vec![] });
     }
+    let missed = load_misses(data).get(login).is_some_and(|t| crate::jobs::now_ms().saturating_sub(*t) < MISS_TTL_MS);
+    missed.then(|| Lookup { user: None, cached: true, emails: vec![] })
+}
+
+/// Find the PR author on Slack, remembering the answer (a match for good, a miss for a
+/// day). `force` searches again regardless.
+pub fn lookup(settings: &Settings, data: &Path, repo: &str, number: u64, login: &str, force: bool) -> Result<Lookup, String> {
+    if !force {
+        if let Some(c) = cached(data, login) {
+            return Ok(c);
+        }
+    }
+    let _one_at_a_time = LOOKUP.lock().unwrap();
+    // Someone else may have finished this lookup while we waited.
+    if !force {
+        if let Some(c) = cached(data, login) {
+            return Ok(c);
+        }
+    }
+    let r = search_user(settings, repo, number, login);
+    match &r {
+        Ok(l) => match &l.user {
+            Some(u) => save_user(data, login, u),
+            None => save_miss(data, login),
+        },
+        Err(_) => forget_tools(),
+    }
+    r
+}
+
+fn search_user(settings: &Settings, repo: &str, number: u64, login: &str) -> Result<Lookup, String> {
     let t = tools(settings)?;
     let emails = author_emails(repo, number, login);
     let name = shell::run("gh", &["api", &format!("users/{login}"), "--jq", ".name // \"\""], None)
@@ -244,14 +325,12 @@ MESSAGE>>>",
         "required": ["sent"],
         "properties": { "sent": { "type": "boolean" }, "link": { "type": "string" }, "error": { "type": "string" } }
     });
-    let v = run(settings, &prompt, &t.send, schema)?;
+    let v = run(settings, &prompt, &t.send, schema).inspect_err(|_| forget_tools())?;
     if v.get("sent").and_then(|b| b.as_bool()) != Some(true) {
         return Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("Slack did not confirm the message").to_string());
     }
-    // Confirmed by the user and delivered: remember the match.
-    let mut cache = load_cache(data);
-    cache.insert(login.to_string(), user.clone());
-    let _ = std::fs::write(cache_path(data), serde_json::to_string_pretty(&cache).unwrap_or_default());
+    // The user confirmed this person by sending: keep the match.
+    save_user(data, login, user);
     Ok(v.get("link").and_then(|l| l.as_str()).unwrap_or_default().to_string())
 }
 
@@ -269,7 +348,7 @@ Return sent=true and the message link if the call succeeded.",
         "required": ["sent"],
         "properties": { "sent": { "type": "boolean" }, "link": { "type": "string" }, "error": { "type": "string" } }
     });
-    let v = run(settings, &prompt, &t.send, schema)?;
+    let v = run(settings, &prompt, &t.send, schema).inspect_err(|_| forget_tools())?;
     if v.get("sent").and_then(|b| b.as_bool()) != Some(true) {
         return Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("Slack did not confirm the message").to_string());
     }
@@ -280,6 +359,10 @@ pub fn forget(data: &Path, login: &str) {
     let mut cache = load_cache(data);
     if cache.remove(login).is_some() {
         let _ = std::fs::write(cache_path(data), serde_json::to_string_pretty(&cache).unwrap_or_default());
+    }
+    let mut m = load_misses(data);
+    if m.remove(login).is_some() {
+        let _ = std::fs::write(misses_path(data), serde_json::to_string(&m).unwrap_or_default());
     }
 }
 

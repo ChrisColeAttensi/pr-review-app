@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -44,7 +45,7 @@ pub fn claude_bin(settings: &Settings) -> Result<String, String> {
 }
 
 pub fn claude_command(claude: &str) -> Command {
-    let mut cmd = Command::new(claude);
+    let mut cmd = crate::shell::command(claude);
     // Launched from inside a Claude Code session (e.g. `tauri dev` run by Claude), the
     // child would inherit that session's host-auth wiring and fail to log in.
     if std::env::var_os("CLAUDECODE").is_some() {
@@ -366,13 +367,14 @@ fn run(
     }
     progress(app, jobs, id, &format!("Starting claude in {}", cwd.display()));
     let mut cmd = claude_command(&claude);
-    let mut child = cmd
-        .args(&args)
+    cmd.args(&args)
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to start claude: {e}"))?;
 
@@ -513,9 +515,12 @@ pub fn cancel(jobs: &Jobs, id: &str) -> Result<(), String> {
     job.info.status = "cancelled".into();
     if let Some(pid) = job.pid {
         // The whole process group: claude plus the agents and tools it spawned.
+        #[cfg(unix)]
         unsafe {
             libc::kill(-(pid as i32), libc::SIGTERM);
         }
+        #[cfg(windows)]
+        let _ = crate::shell::run("taskkill", &["/T", "/F", "/PID", &pid.to_string()], None);
     }
     Ok(())
 }

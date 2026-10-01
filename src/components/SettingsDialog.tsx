@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Categories, Settings } from "../types";
+import { TRAY, isMac } from "../platform";
 
 const CATS: { id: keyof Categories; label: string; hint: string }[] = [
   { id: "reviewRequested", label: "Review requested from me", hint: "Someone asks you (or your team) to review" },
@@ -82,7 +83,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   api.setAutostart(e.target.checked).then(setAutostart).catch((x) => setErr(String(x)))
                 }
               />
-              Launch at login <span className="muted small">starts quietly in the menu bar; applies immediately</span>
+              Launch at login <span className="muted small">starts quietly in the {TRAY}; applies immediately</span>
             </label>
           </section>
 
@@ -106,7 +107,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="row">
               <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
               <span className="spacer" />
-              <button onClick={() => { api.testNotification(); setNotifyMsg("Arrives in 5 seconds: switch to another app now. macOS only shows banners when PR Review is in the background. If it lands only in Notification Center, set PR Review to Banners or Alerts in System Settings → Notifications."); }}>Send test notification</button>
+              <button onClick={() => { api.testNotification(); setNotifyMsg(isMac
+                ? "Arrives in 5 seconds: switch to another app now. macOS only shows banners when PR Review is in the background. If it lands only in Notification Center, set PR Review to Banners or Alerts in System Settings → Notifications."
+                : "Arrives in 5 seconds. If no banner appears, check that notifications for PR Review are on in Settings → System → Notifications, and that Do Not Disturb is off."); }}>Send test notification</button>
             </div>
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Hide review requests that only come via a team (also in the sidebar as “Team requests”)</label>

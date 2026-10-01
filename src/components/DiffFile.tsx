@@ -3,6 +3,7 @@ import { Diff, Hunk, getChangeKey, tokenize, type ChangeData, type FileData, typ
 import { refractor } from "refractor";
 import { Markdown } from "./Markdown";
 import type { Annotation, AnnotationKind, Draft } from "../types";
+import { MOD_ENTER, mod } from "../platform";
 
 export const filePath = (f: FileData) => (f.type === "delete" ? f.oldPath : f.newPath);
 
@@ -81,10 +82,10 @@ function Composer({ initial = "", onSave, onCancel }: { initial?: string; onSave
       <textarea
         autoFocus
         value={body}
-        placeholder="Private review note (never posted). Markdown ok. ⌘↩ to save"
+        placeholder={`Private review note (never posted). Markdown ok. ${MOD_ENTER} to save`}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && e.metaKey && body.trim()) onSave(body.trim());
+          if (e.key === "Enter" && mod(e) && body.trim()) onSave(body.trim());
           if (e.key === "Escape") onCancel();
         }}
       />

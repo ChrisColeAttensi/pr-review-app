@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type SlackUser } from "../api";
 import type { Pr, Settings } from "../types";
 import { useToasts } from "../toasts";
+import { mod } from "../platform";
 
 /** Send without blocking: a toast tracks it, with Retry and Copy if it fails. */
 function sendInBackground(toasts: ReturnType<typeof useToasts>, login: string, user: SlackUser, message: string, replace?: number) {
@@ -108,7 +109,7 @@ export function SlackPrompt({ pr, reason, settings, onClose }: {
           </div>
           <textarea rows={4} value={message} 
             onChange={(e) => { setMessage(e.target.value); setEdited(true); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey && phase === "found") send(); }} />
+            onKeyDown={(e) => { if (e.key === "Enter" && mod(e) && phase === "found") send(); }} />
           <p className="muted small">Sent as you, through your Claude Slack connector. It sends in the background; a toast tells you when it's done.</p>
           {err && <div className="banner error">{err}</div>}
         </div>

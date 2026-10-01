@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_notification::NotificationExt;
 
@@ -430,7 +430,6 @@ fn pr_index(state: tauri::State<AppState>) -> HashMap<String, store::IndexEntry>
 fn handoff(app: AppHandle, repo: String, number: u64, target: String, url: String) -> Result<(), String> {
     let state = app.state::<AppState>();
     let session = store::resumable(&state.data_dir, &repo, number);
-    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     match target.as_str() {
         "desktop" => {
             let link = match &session {
@@ -448,19 +447,52 @@ fn handoff(app: AppHandle, repo: String, number: u64, target: String, url: Strin
                     l
                 }
             };
+            #[cfg(windows)]
+            {
+                use tauri_plugin_opener::OpenerExt;
+                app.opener().open_url(link, None::<&str>).map_err(|e| e.to_string())
+            }
+            #[cfg(not(windows))]
             shell::run("open", &[&link], None).map(|_| ())
         }
         "terminal" => {
-            let cmd = match &session {
-                Some((sid, cwd)) => format!("cd {} && claude --resume {}", quote(cwd), quote(sid)),
-                None => {
-                    let s = state.settings.lock().unwrap().clone();
-                    let dir = repos::resolve(&s, &repo).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "~".into());
-                    format!("cd {} && claude {}", quote(&dir), quote(&format!("Let's review {url}")))
-                }
-            };
-            let script = format!("tell application \"Terminal\"\n activate\n do script {}\nend tell", serde_json::to_string(&cmd).unwrap());
-            shell::run("osascript", &["-e", &script], None).map(|_| ())
+            #[cfg(windows)]
+            {
+                // A fresh console runs claude directly: no shell quoting to get wrong, and
+                // Windows 11 hosts it in Windows Terminal when that is the default terminal.
+                use std::os::windows::process::CommandExt;
+                const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+                let s = state.settings.lock().unwrap().clone();
+                let claude = jobs::claude_bin(&s)?;
+                let (dir, args): (PathBuf, Vec<String>) = match &session {
+                    Some((sid, cwd)) => (PathBuf::from(cwd), vec!["--resume".into(), sid.clone()]),
+                    None => (
+                        repos::resolve(&s, &repo).or_else(dirs::home_dir).unwrap_or_default(),
+                        vec![format!("Let's review {url}")],
+                    ),
+                };
+                jobs::claude_command(&claude)
+                    .args(&args)
+                    .current_dir(&dir)
+                    .creation_flags(CREATE_NEW_CONSOLE)
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|e| format!("failed to start claude: {e}"))
+            }
+            #[cfg(not(windows))]
+            {
+                let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+                let cmd = match &session {
+                    Some((sid, cwd)) => format!("cd {} && claude --resume {}", quote(cwd), quote(sid)),
+                    None => {
+                        let s = state.settings.lock().unwrap().clone();
+                        let dir = repos::resolve(&s, &repo).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "~".into());
+                        format!("cd {} && claude {}", quote(&dir), quote(&format!("Let's review {url}")))
+                    }
+                };
+                let script = format!("tell application \"Terminal\"\n activate\n do script {}\nend tell", serde_json::to_string(&cmd).unwrap());
+                shell::run("osascript", &["-e", &script], None).map(|_| ())
+            }
         }
         t => Err(format!("unknown handoff target {t}")),
     }
@@ -609,7 +641,7 @@ pub fn run() {
 
     app.run(|app, event| {
         #[cfg(target_os = "macos")]
-        if let RunEvent::Reopen { .. } = event {
+        if let tauri::RunEvent::Reopen { .. } = event {
             show_window(app);
         }
         let _ = (app, &event);

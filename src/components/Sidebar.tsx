@@ -6,6 +6,7 @@ import { api } from "../api";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Category, IndexEntry, Pr, Snapshot } from "../types";
+import { keys } from "../platform";
 
 export const SECTIONS: { id: Category; label: string }[] = [
   { id: "reviewRequested", label: "Review requested" },
@@ -127,10 +128,10 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
     <aside className="sidebar">
       <div className="side-top" data-tauri-drag-region>
         <span className="app-name" data-tauri-drag-region>PR Review</span>
-        <button className="icon" title="Refresh (⌘R)" onClick={onRefresh}>
+        <button className="icon" title={`Refresh (${keys("R")})`} onClick={onRefresh}>
           <span className={snap.loading ? "spin" : ""}>↻</span>
         </button>
-        <button className="icon" title="Settings (⌘,)" onClick={onSettings}>⚙</button>
+        <button className="icon" title={`Settings (${keys(",")})`} onClick={onSettings}>⚙</button>
       </div>
       <div className="side-search">
         <input placeholder="Filter PRs…  (/)" value={filter} onChange={(e) => setFilter(e.target.value)} id="pr-filter" />

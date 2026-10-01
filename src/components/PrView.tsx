@@ -13,6 +13,7 @@ import type { SlackReason } from "./SlackPrompt";
 import { ChatTab } from "./ChatTab";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
+import { TRAY, keys } from "../platform";
 
 type Tab = "overview" | "walkthrough" | "files" | "review" | "notes" | "claude";
 const TABS: { id: Tab; label: string }[] = [
@@ -216,7 +217,7 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
         </div>
         <nav className="tabs">
           {TABS.map((t, i) => (
-            <button key={t.id} className={tab === t.id ? "tab on" : "tab"} onClick={() => setTab(t.id)} title={`⌘${i + 1}`}>
+            <button key={t.id} className={tab === t.id ? "tab on" : "tab"} onClick={() => setTab(t.id)} title={keys(String(i + 1))}>
               {t.label}
               {t.id === "walkthrough" && running("insights") && <span className="spinner" />}
               {t.id === "review" && running("review") && <span className="spinner" />}
@@ -251,7 +252,7 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
       )}
       {pr.ignored && (
         <div className="banner warn row">
-          You're ignoring this PR: it's hidden from the menu bar and notifications.
+          You're ignoring this PR: it's hidden from the {TRAY} and notifications.
           <span className="spacer" />
           <button className="link" onClick={() => api.setIgnored(pr.key, pr.title, false)}>Stop ignoring</button>
         </div>

@@ -149,11 +149,37 @@ pub fn usage(data: &Path) -> Usage {
     let list = worktrees(data);
     let bytes = list
         .iter()
-        .filter_map(|p| shell::run("du", &["-sk", &p.to_string_lossy()], None).ok())
-        .filter_map(|out| out.split_whitespace().next().and_then(|k| k.parse::<u64>().ok()))
-        .sum::<u64>()
-        * 1024;
+        .map(|p| dir_bytes(p))
+        .sum::<u64>();
     Usage { count: list.len(), bytes }
+}
+
+#[cfg(unix)]
+fn dir_bytes(p: &Path) -> u64 {
+    shell::run("du", &["-sk", &p.to_string_lossy()], None)
+        .ok()
+        .and_then(|out| out.split_whitespace().next().and_then(|k| k.parse::<u64>().ok()))
+        .unwrap_or(0)
+        * 1024
+}
+
+/// No `du` on Windows: walk the tree, without following junctions or symlinks.
+#[cfg(windows)]
+fn dir_bytes(p: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![p.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let Ok(meta) = std::fs::symlink_metadata(e.path()) else { continue };
+            if meta.is_dir() {
+                stack.push(e.path());
+            } else if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 pub const INTERVAL: Duration = Duration::from_secs(3600);

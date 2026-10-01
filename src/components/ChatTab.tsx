@@ -4,6 +4,7 @@ import { useJobs } from "../jobs";
 import { JobLog } from "./JobLog";
 import { Markdown } from "./Markdown";
 import type { ChatMessage, Draft, Pr, PrState } from "../types";
+import { MOD_ENTER, isMac, mod } from "../platform";
 
 function notesAsMarkdown(drafts: Draft[]) {
   return drafts
@@ -74,8 +75,8 @@ export function ChatTab({ pr, state }: { pr: Pr; state: PrState }) {
         <button onClick={() => api.handoff(pr.repo, pr.number, "desktop", pr.url)} title="Resume this conversation in Claude Desktop's Code tab">
           Continue in Claude Desktop ↗
         </button>
-        <button onClick={() => api.handoff(pr.repo, pr.number, "terminal", pr.url)} title="claude --resume in Terminal">
-          Open in Terminal
+        <button onClick={() => api.handoff(pr.repo, pr.number, "terminal", pr.url)} title={isMac ? "claude --resume in Terminal" : "claude --resume in a new terminal window"}>
+          {isMac ? "Open in Terminal" : "Open in terminal"}
         </button>
       </div>
 
@@ -108,9 +109,9 @@ export function ChatTab({ pr, state }: { pr: Pr; state: PrState }) {
       <div className="chat-input">
         <textarea
           value={text}
-          placeholder={running ? "Claude is working…" : "Message Claude about this PR…  (⌘↩ to send)"}
+          placeholder={running ? "Claude is working…" : `Message Claude about this PR…  (${MOD_ENTER} to send)`}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); send(text); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && mod(e)) { e.preventDefault(); send(text); } }}
         />
         <button className="primary" disabled={running || !text.trim()} onClick={() => send(text)}>Send</button>
       </div>

@@ -72,7 +72,7 @@ impl Default for Settings {
             show_drafts: false,
             direct_requests_only: false,
             watched_repos: vec![],
-            repo_roots: vec!["~/Developer".into()],
+            repo_roots: vec![if cfg!(windows) { "~/source/repos" } else { "~/Developer" }.into()],
             repo_paths: HashMap::new(),
             claude_path: String::new(),
             review_command: "/chriscole-skills:pr-review {url}".into(),
@@ -91,7 +91,7 @@ impl Default for Settings {
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/") {
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
         }

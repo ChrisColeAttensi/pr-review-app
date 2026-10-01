@@ -10,6 +10,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import type { Pr, Snapshot } from "./types";
 import "react-diff-view/style/index.css";
 import "./App.css";
+import { mod } from "./platform";
 
 const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "review", "notes", "claude"];
 
@@ -59,9 +60,9 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement).closest("input, textarea, select");
-      if (e.metaKey && e.key === ",") { e.preventDefault(); setSettingsOpen(true); return; }
-      if (e.metaKey && e.key === "r") { e.preventDefault(); api.refresh(); return; }
-      if (e.metaKey && /^[1-6]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
+      if (mod(e) && e.key === ",") { e.preventDefault(); setSettingsOpen(true); return; }
+      if (mod(e) && e.key === "r") { e.preventDefault(); api.refresh(); return; }
+      if (mod(e) && /^[1-6]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
       if (typing) return;
       if (e.key === "/") { e.preventDefault(); document.getElementById("pr-filter")?.focus(); }
       if (e.key === "j" || e.key === "k") {

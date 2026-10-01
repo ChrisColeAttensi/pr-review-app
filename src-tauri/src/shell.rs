@@ -4,6 +4,35 @@
 use std::path::Path;
 use std::process::Command;
 
+/// A `Command` that never flashes a console window when spawned from the GUI on Windows.
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
+/// Windows GUI apps already inherit the user's full PATH; only add the native installer's dir.
+#[cfg(windows)]
+pub fn adopt_login_shell_path() {
+    if let Some(home) = dirs::home_dir() {
+        let extra = home.join(".local").join("bin");
+        let mut paths: Vec<_> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        if !paths.contains(&extra) {
+            paths.push(extra);
+            if let Ok(joined) = std::env::join_paths(paths) {
+                std::env::set_var("PATH", joined);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
 pub fn adopt_login_shell_path() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let out = Command::new(&shell)
@@ -40,7 +69,7 @@ pub fn adopt_login_shell_path() {
 }
 
 pub fn run(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
-    let mut c = Command::new(cmd);
+    let mut c = command(cmd);
     c.args(args);
     if let Some(dir) = cwd {
         c.current_dir(dir);
@@ -54,8 +83,15 @@ pub fn run(cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, Strin
 }
 
 pub fn which(name: &str) -> Option<String> {
-    run("/usr/bin/which", &[name], None)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    #[cfg(windows)]
+    let found = run("where.exe", &[name], None).ok().and_then(|s| {
+        // `where` lists every match in PATH order; a real .exe spawns more reliably
+        // than an npm .cmd shim, which goes through cmd.exe's argument parsing.
+        let lines: Vec<String> = s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        lines.iter().find(|l| l.to_lowercase().ends_with(".exe")).or(lines.first()).cloned()
+    });
+    #[cfg(not(windows))]
+    let found = run("/usr/bin/which", &[name], None).ok().map(|s| s.trim().to_string());
+    found.filter(|s| !s.is_empty())
 }
+

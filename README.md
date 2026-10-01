@@ -100,6 +100,16 @@ bun run tauri dev
 
 `bun run dev` serves the UI in a normal browser with a mocked backend. It reads fixtures from `src/dev/fixtures/`, which is gitignored.
 
+### Windows
+
+The app also builds on Windows. It needs the Rust MSVC toolchain and bun; WebView2 ships with Windows 11.
+
+```powershell
+bun run tauri build
+```
+
+This produces a per-user NSIS installer (no admin rights needed) in `src-tauri/target/release/bundle/nsis/`. It isn't code-signed, so SmartScreen warns on first run: choose **More info → Run anyway**. `gh`, `git` and `claude` must be on `PATH`. Use Claude Code's native installer (`claude.exe`) rather than the npm one, or set the path to `claude` in Settings. The release script and Homebrew cask are macOS only.
+
 ### Release
 
 ```bash

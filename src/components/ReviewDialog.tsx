@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { Pr } from "../types";
+import { mod } from "../platform";
 
 type Event = "comment" | "approve" | "request_changes";
 
@@ -56,7 +57,7 @@ export function ReviewDialog({ pr, me, onClose, onDone }: { pr: Pr; me: string; 
             value={body}
             placeholder={event === "approve" ? "Leave a comment (optional)" : "Leave a comment"}
             onChange={(e) => setBody(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey && ready && !busy) go(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && mod(e) && ready && !busy) go(); }}
           />
           <div className="review-options">
             {OPTIONS.map((o) => {

@@ -69,7 +69,7 @@ export interface Settings {
   reviewModel: string;
   insightsModel: string;
   autoInsights: boolean;
-  liveCheckChrome: boolean;
+  allowChromeVerify: boolean;
   worktreeRetentionDays: number;
   slackOnApprove: boolean;
   slackOnMerge: boolean;

@@ -47,8 +47,8 @@ pub struct Settings {
     pub permission_mode: String,
     pub review_model: String,
     pub insights_model: String,
-    /// Default for "Live check in Chrome" on pr-review runs (passes `--chrome`).
-    pub live_check_chrome: bool,
+    /// Let pr-review verify the change in Chrome when it decides that's needed (passes `--chrome`).
+    pub allow_chrome_verify: bool,
     /// Run the insights pass automatically when a review is requested from me.
     pub auto_insights: bool,
     /// Offer to DM the author on Slack after approving / merging their PR.
@@ -80,7 +80,7 @@ impl Default for Settings {
             review_model: String::new(),
             insights_model: String::new(),
             auto_insights: false,
-            live_check_chrome: false,
+            allow_chrome_verify: true,
             worktree_retention_days: 7,
             slack_on_approve: true,
             slack_on_merge: true,

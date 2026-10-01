@@ -74,9 +74,26 @@ pub fn resolve(settings: &Settings, repo: &str) -> Option<PathBuf> {
     discover(settings).get(&repo.to_lowercase()).map(PathBuf::from)
 }
 
+static CLONE_LOCKS: std::sync::Mutex<Vec<(PathBuf, std::sync::Arc<std::sync::Mutex<()>>)>> = std::sync::Mutex::new(Vec::new());
+
+fn clone_lock(clone: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    let mut locks = CLONE_LOCKS.lock().unwrap();
+    if let Some((_, l)) = locks.iter().find(|(p, _)| p == clone) {
+        return l.clone();
+    }
+    let l = std::sync::Arc::new(std::sync::Mutex::new(()));
+    locks.push((clone.to_path_buf(), l.clone()));
+    l
+}
+
 /// Check out the PR head in a worktree of its own, so the user's checkout is never touched.
+/// Each PR fetches into its own ref (never the shared FETCH_HEAD), and git setup on one
+/// clone runs one at a time, so concurrent reviews can't check out each other's code.
 pub fn prepare_worktree(clone: &Path, wt: &Path, number: u64, base: &str) -> Result<(), String> {
-    let refspec = format!("pull/{number}/head");
+    let lock = clone_lock(clone);
+    let _one_at_a_time = lock.lock().unwrap();
+    let local = format!("refs/pr-review/{number}");
+    let refspec = format!("+pull/{number}/head:{local}");
     if wt.join(".git").exists() {
         // Edits from a chat would be lost by the forced checkout: stash them, recoverably.
         let dirty = shell::run("git", &["status", "--porcelain"], Some(wt)).map(|s| !s.trim().is_empty()).unwrap_or(false);
@@ -84,7 +101,7 @@ pub fn prepare_worktree(clone: &Path, wt: &Path, number: u64, base: &str) -> Res
             shell::run("git", &["stash", "push", "--include-untracked", "--quiet", "-m", "pr-review-app: before re-checkout"], Some(wt))?;
         }
         shell::run("git", &["fetch", "--quiet", "origin", &refspec], Some(wt))?;
-        shell::run("git", &["checkout", "--quiet", "--detach", "--force", "FETCH_HEAD"], Some(wt))?;
+        shell::run("git", &["checkout", "--quiet", "--detach", "--force", &local], Some(wt))?;
     } else {
         if let Some(parent) = wt.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -93,7 +110,7 @@ pub fn prepare_worktree(clone: &Path, wt: &Path, number: u64, base: &str) -> Res
         let _ = shell::run("git", &["worktree", "prune"], Some(clone));
         shell::run("git", &["fetch", "--quiet", "origin", &refspec], Some(clone))?;
         let wt_s = wt.to_string_lossy().to_string();
-        shell::run("git", &["worktree", "add", "--detach", &wt_s, "FETCH_HEAD"], Some(clone))?;
+        shell::run("git", &["worktree", "add", "--detach", &wt_s, &local], Some(clone))?;
     }
     if !base.is_empty() {
         let _ = shell::run("git", &["fetch", "--quiet", "origin", base], Some(wt));

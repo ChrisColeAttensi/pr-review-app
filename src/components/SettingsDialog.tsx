@@ -230,7 +230,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span>claude binary</span>
               <input placeholder="found on PATH" value={s.claudePath} onChange={(e) => set({ claudePath: e.target.value })} />
             </label>
-            <label className="check"><input type="checkbox" checked={s.liveCheckChrome} onChange={(e) => set({ liveCheckChrome: e.target.checked })} /> Live check in Chrome by default: pr-review may drive the app in your Chrome via Claude in Chrome (needs the extension running)</label>
+            <label className="check"><input type="checkbox" checked={s.allowChromeVerify} onChange={(e) => set({ allowChromeVerify: e.target.checked })} /> Allow pr-review to verify in Chrome when needed: it decides per PR, and only opens Chrome for changes the diff and CI can't settle (needs the Claude in Chrome extension)</label>
             <label className="check"><input type="checkbox" checked={s.autoInsights} onChange={(e) => set({ autoInsights: e.target.checked })} /> Explain new review requests automatically, so the walkthrough is ready when you open them</label>
           </section>
         </div>

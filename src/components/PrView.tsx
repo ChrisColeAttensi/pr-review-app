@@ -56,9 +56,15 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
   const [merging, setMerging] = useState(false);
   const [merged, setMerged] = useState<string>();
   const [reviewing, setReviewing] = useState(false);
-  // Per-run choice, starting from the Settings default.
-  const [liveChrome, setLiveChrome] = useState<boolean>();
-  const chrome = liveChrome ?? jobs.settings?.liveCheckChrome ?? false;
+  // A saved setting, so it holds across tabs, PRs and restarts. pr-review decides per PR
+  // whether a Chrome check is actually needed.
+  const [chromeOverride, setChromeOverride] = useState<boolean>();
+  const chrome = chromeOverride ?? jobs.settings?.allowChromeVerify ?? true;
+  const setChrome = async (on: boolean) => {
+    setChromeOverride(on);
+    const s = await api.settings();
+    await api.saveSettings({ ...s, allowChromeVerify: on });
+  };
   const runReview = () => jobs.start(pr.repo, pr.number, "review", undefined, chrome);
   // Start the (slow, first-time) Slack lookup while the user is still writing the
   // review, so the prompt afterwards is instant. The answer is cached on disk.
@@ -288,9 +294,9 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
 
         {tab === "review" && (
           <div className="review-tab">
-            <label className="check live-check" title="Starts claude with --chrome so pr-review can drive the app in your Chrome for its live-check pass">
-              <input type="checkbox" checked={chrome} onChange={(e) => setLiveChrome(e.target.checked)} />
-              Live check in Chrome <span className="muted small">— lets pr-review open the app in your Chrome (Claude in Chrome) to test the change</span>
+            <label className="check live-check" title="Starts claude with --chrome. pr-review only opens Chrome for changes the diff and CI can't settle.">
+              <input type="checkbox" checked={chrome} onChange={(e) => setChrome(e.target.checked)} />
+              Allow pr-review to verify in Chrome when needed <span className="muted small">(Claude in Chrome; it decides per PR)</span>
             </label>
             {reviewJob && (reviewJob.status === "running" || reviewJob.status === "failed") && <JobLog job={reviewJob} estimate={est.review} />}
             {state.review ? (

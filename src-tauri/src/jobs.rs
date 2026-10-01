@@ -71,11 +71,12 @@ Do NOT do step 8: never post or draft GitHub comments, never push, never edit or
 Where a step would ask the user something, take the default the skill recommends and say so in one line in the report. \
 The working directory is a throwaway worktree checked out at the PR head.";
 
-const CHROME_NOTE: &str = "The user switched on live checks for this run and Claude in Chrome is connected: \
-treat any live-check pass the skill or the repo's review profile describes (including ones marked ask-first) as approved, \
-and name Claude in Chrome as the driver in the live checker's brief, since the built-in browser is not available here. \
-Stay on the app under test (local dev server or the PR's preview deploy) in a tab of your own, and never sign in, \
-submit forms that send real data, or change account settings.";
+const CHROME_NOTE: &str = "Claude in Chrome is connected, and the user allows you to verify this PR in it when needed. \
+Decide that yourself: run the live check only for claims the diff, the build and CI cannot settle (a flow, a screen, \
+something a user must see); skip it for refactors, docs, config, backend-only or test-only changes, and say in one line \
+why it was skipped. When you do run it, treat ask-first live passes as approved, and name Claude in Chrome as the \
+driver in the live checker's brief (the built-in browser is not available here). Stay on the app under test in a tab \
+of your own, and never sign in, submit forms that send real data, or change account settings.";
 
 pub fn insights_schema() -> Value {
     json!({
@@ -396,14 +397,31 @@ fn run(
     });
 
     let mut result: Option<Value> = None;
+    // The final message isn't always the report: a background agent finishing after the
+    // report wakes the session for one more (often empty) turn. Keep the last main-thread
+    // text that reads as a report, and the last main-thread text of any kind.
+    let mut last_report: Option<String> = None;
+    let mut last_text: Option<String> = None;
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             if line.trim().is_empty() {
                 continue;
             }
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                if v.get("type").and_then(|t| t.as_str()) == Some("result") {
-                    result = Some(v);
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("result") => result = Some(v),
+                    Some("assistant") if v.get("parent_tool_use_id").map_or(true, |p| p.is_null()) => {
+                        let blocks = v.pointer("/message/content").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+                        for b in blocks {
+                            if let Some(t) = b.get("text").and_then(|t| t.as_str()).map(str::trim).filter(|t| !t.is_empty()) {
+                                if t.starts_with("# ") {
+                                    last_report = Some(t.to_string());
+                                }
+                                last_text = Some(t.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             emit_line(app, jobs, id, line);
@@ -446,14 +464,18 @@ fn run(
     }
 
     if kind == "chat" {
-        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "assistant".into(), text, ts: now_ms() });
+        let reply = if text.trim().is_empty() { last_text.clone().unwrap_or_default() } else { text.clone() };
+        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "assistant".into(), text: reply, ts: now_ms() });
         store::write(data_dir, repo, number, "chat.meta.json", &serde_json::to_string(&meta).unwrap())?;
         finish(app, jobs, id, "done", None);
         let _ = app.notification().builder().title(format!("Claude replied · {repo}#{number}")).body(title).show();
         return Ok(());
     }
     if kind == "review" {
-        store::write(data_dir, repo, number, "review.md", &text)?;
+        let report = if text.trim_start().starts_with("# ") { Some(text.clone()) } else { last_report.or(last_text) }
+            .filter(|t| !t.trim().is_empty())
+            .ok_or("pr-review finished without writing a report; see the run log")?;
+        store::write(data_dir, repo, number, "review.md", &report)?;
         store::write(data_dir, repo, number, "review.meta.json", &serde_json::to_string(&meta).unwrap())?;
     } else {
         let structured = res

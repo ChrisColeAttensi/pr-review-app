@@ -43,8 +43,13 @@ You need an **Apple Silicon Mac** and Homebrew. Then:
 brew tap chriscoleattensi/tap https://github.com/ChrisColeAttensi/homebrew-tap
 ```
 ```bash
+brew trust chriscoleattensi/tap
+```
+```bash
 brew install --cask chriscoleattensi/tap/pr-review
 ```
+
+Homebrew 7+ only installs from taps you have trusted, which is what `brew trust` is for.
 
 Open **PR Review** from Applications. It appears in the menu bar. Then turn on **Settings → General → Launch at login**.
 

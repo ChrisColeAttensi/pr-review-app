@@ -29,6 +29,7 @@ export const api = {
   handoff: (repo: string, number: number, target: "desktop" | "terminal", url: string) =>
     invoke<void>("handoff", { repo, number, target, url }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
+  clearThread: (repo: string, number: number) => invoke<void>("clear_thread", { repo, number }),
   listJobs: () => invoke<JobInfo[]>("list_jobs"),
   jobLines: (id: string) => invoke<string[]>("job_lines", { id }),
   history: () => invoke<HistoryRun[]>("run_history"),

@@ -84,7 +84,7 @@ brew uninstall --zap --cask pr-review
 | --- | --- |
 | Menu bar | Click a PR to open it in the app. |
 | Sidebar | `j` / `k` to move, `/` to filter, right-click for Ignore, Open on GitHub, Explain, Run pr-review. |
-| PR tabs | Overview · Walkthrough · Files · pr-review · My notes · Claude (`⌘1`–`⌘6`) |
+| PR tabs | Overview · Walkthrough · Files · Claude (pr-review + chat) · My notes (`⌘1`–`⌘5`) |
 | Header | Review… (approve / request changes / comment), Merge…, Explain, Run pr-review. Buttons show a time and cost estimate learned from your own past runs. |
 
 Claude runs use **your** `claude` login and plan, so they count against your usage. The time and cost estimates are learned from your own past runs.

@@ -110,7 +110,7 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
   snap: Snapshot; selected?: string; onSelect: (k: string) => void; onSettings: () => void; onRefresh: () => void;
   filter: string; setFilter: (s: string) => void;
 }) {
-  const { jobs, finishedTick, start } = useJobs();
+  const { jobs, finishedTick, start, settings } = useJobs();
   const ignoredCount = snap.prs.filter((p) => p.ignored).length;
   const [index, setIndex] = useState<Record<string, IndexEntry>>({});
   useEffect(() => {
@@ -158,7 +158,7 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
                 items.map((p) => (
                   <div key={p.key} className={`pr-item ${selected === p.key ? "sel" : ""} ${p.ignored ? "ignored" : ""}`}
                     onClick={() => onSelect(p.key)}
-                    onContextMenu={(e) => { e.preventDefault(); showContextMenu(p, (k) => start(p.repo, p.number, k)); }}>
+                    onContextMenu={(e) => { e.preventDefault(); showContextMenu(p, (k) => start(p.repo, p.number, k, undefined, k === "review" && (settings?.allowChromeVerify ?? true))); }}>
                     <img className="avatar" src={p.authorAvatar} alt="" />
                     <div className="pr-item-main">
                       <div className="pr-item-title">

@@ -12,7 +12,7 @@ import "react-diff-view/style/index.css";
 import "./App.css";
 import { mod } from "./platform";
 
-const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "review", "notes", "claude"];
+const TAB_ORDER: Tab[] = ["overview", "walkthrough", "files", "claude", "notes"];
 
 function SlackHost({ offer, onClose }: { offer?: { pr: Pr; reason: SlackReason }; onClose: () => void }) {
   const { settings } = useJobs();
@@ -62,7 +62,7 @@ export default function App() {
       const typing = (e.target as HTMLElement).closest("input, textarea, select");
       if (mod(e) && e.key === ",") { e.preventDefault(); setSettingsOpen(true); return; }
       if (mod(e) && e.key === "r") { e.preventDefault(); api.refresh(); return; }
-      if (mod(e) && /^[1-6]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
+      if (mod(e) && /^[1-5]$/.test(e.key)) { e.preventDefault(); setTab(TAB_ORDER[Number(e.key) - 1]); return; }
       if (typing) return;
       if (e.key === "/") { e.preventDefault(); document.getElementById("pr-filter")?.focus(); }
       if (e.key === "j" || e.key === "k") {

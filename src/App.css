@@ -487,3 +487,18 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 .toast-error { border-color: color-mix(in srgb, var(--del) 55%, transparent); }
 .toast-x { color: var(--fg-muted); }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Claude tab: the thread scrolls, the composer stays pinned to the bottom. */
+.pr-body.chat-mode { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
+.chat-mode .chat-tab { flex: 1; height: auto; width: 100%; max-width: none; }
+.chat-mode .chat-log { overflow-y: auto; min-height: 0; padding-right: 4px; }
+.chat-dock { flex: none; background: var(--bg); padding: 8px 0 0; border-top: 1px solid var(--border); }
+.chat-dock .chat-input { position: static; padding: 0; }
+.chat-dock .live-check { margin: 6px 0 0; }
+.chip-primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.model-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-card); }
+.chat-log .report { align-self: stretch; }
+.chat-log .report > summary { cursor: pointer; list-style: none; }
+.chat-log .report > summary::-webkit-details-marker { display: none; }
+.run-log { margin-top: 12px; }
+.sign-in { margin: 0 0 8px; align-items: center; gap: 10px; }

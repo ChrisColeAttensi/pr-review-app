@@ -77,7 +77,24 @@ Decide that yourself: run the live check only for claims the diff, the build and
 something a user must see); skip it for refactors, docs, config, backend-only or test-only changes, and say in one line \
 why it was skipped. When you do run it, treat ask-first live passes as approved, and name Claude in Chrome as the \
 driver in the live checker's brief (the built-in browser is not available here). Stay on the app under test in a tab \
-of your own, and never sign in, submit forms that send real data, or change account settings.";
+of your own, and never sign in, submit forms that send real data, or change account settings. \
+SIGN_IN";
+
+const CHAT_CHROME_NOTE: &str = "Claude in Chrome is connected for this conversation (the built-in browser is not). \
+When the user asks you to check something in a browser, use the claude-in-chrome tools: open a tab of your own, stay on \
+the app under test, and never sign in, enter credentials, or submit forms that send real data. \
+SIGN_IN";
+
+/// Shared by review and chat: a login wall becomes a request to the user, not a dead end.
+/// The app looks for the marker line and offers a "signed in, continue" button.
+const SIGN_IN_NOTE: &str = "If the app under test needs a login that Chrome doesn't have, do not give up on the check \
+and do not try to sign in. Leave your Chrome tab open on the login page, so the user can sign in there, and finish \
+your message with this exact line on its own: `SIGN-IN NEEDED: <login page url>`. The user will sign in and reply, and \
+you then carry on from where you stopped.";
+
+fn with_sign_in(note: &str) -> String {
+    note.replace("SIGN_IN", SIGN_IN_NOTE)
+}
 
 pub fn insights_schema() -> Value {
     json!({
@@ -322,7 +339,7 @@ fn run(
             .replace("{url}", &url)
             .replace("{number}", &number.to_string())
             .replace("{repo}", repo);
-        let note = if chrome { format!("{HEADLESS_NOTE} {CHROME_NOTE}") } else { HEADLESS_NOTE.to_string() };
+        let note = if chrome { format!("{HEADLESS_NOTE} {}", with_sign_in(CHROME_NOTE)) } else { HEADLESS_NOTE.to_string() };
         args.extend(["-p".into(), prompt, "--append-system-prompt".into(), note]);
         model = settings.review_model.clone();
     } else if kind == "chat" {
@@ -331,7 +348,8 @@ fn run(
             Some(_) => text.to_string(),
             None => fresh_chat_prompt(&url, store::load(data_dir, repo, number).review.as_deref(), text),
         };
-        args.extend(["-p".into(), prompt, "--append-system-prompt".into(), chat_note(&url)]);
+        let note = if chrome { format!("{} {}", chat_note(&url), with_sign_in(CHAT_CHROME_NOTE)) } else { chat_note(&url) };
+        args.extend(["-p".into(), prompt, "--append-system-prompt".into(), note]);
         if let Some((sid, _)) = &resume {
             args.extend(["--resume".into(), sid.clone()]);
         }
@@ -404,6 +422,7 @@ fn run(
     // text that reads as a report, and the last main-thread text of any kind.
     let mut last_report: Option<String> = None;
     let mut last_text: Option<String> = None;
+    let mut resolved_model: Option<String> = None;
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             if line.trim().is_empty() {
@@ -412,6 +431,9 @@ fn run(
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 match v.get("type").and_then(|t| t.as_str()) {
                     Some("result") => result = Some(v),
+                    Some("system") if v.get("subtype").and_then(|s| s.as_str()) == Some("init") => {
+                        resolved_model = v.get("model").and_then(|m| m.as_str()).map(String::from);
+                    }
                     Some("assistant") if v.get("parent_tool_use_id").map_or(true, |p| p.is_null()) => {
                         let blocks = v.pointer("/message/content").and_then(|c| c.as_array()).cloned().unwrap_or_default();
                         for b in blocks {
@@ -459,6 +481,7 @@ fn run(
         model: Some(model.clone()),
         session_id: res.get("session_id").and_then(|v| v.as_str()).map(String::from),
         cwd: Some(cwd.to_string_lossy().to_string()),
+        resolved_model,
     };
     let text = res.get("result").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     if is_error {
@@ -467,10 +490,11 @@ fn run(
 
     if kind == "chat" {
         let reply = if text.trim().is_empty() { last_text.clone().unwrap_or_default() } else { text.clone() };
-        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "assistant".into(), text: reply, ts: now_ms() });
+        store::push_chat(data_dir, repo, number, store::ChatMessage { role: "assistant".into(), text: reply.clone(), ts: now_ms() });
         store::write(data_dir, repo, number, "chat.meta.json", &serde_json::to_string(&meta).unwrap())?;
         finish(app, jobs, id, "done", None);
-        let _ = app.notification().builder().title(format!("Claude replied · {repo}#{number}")).body(title).show();
+        let heading = if needs_sign_in(&reply) { "Sign in needed in Chrome" } else { "Claude replied" };
+        let _ = app.notification().builder().title(format!("{heading} · {repo}#{number}")).body(title).show();
         return Ok(());
     }
     if kind == "review" {
@@ -478,6 +502,10 @@ fn run(
             .filter(|t| !t.trim().is_empty())
             .ok_or("pr-review finished without writing a report; see the run log")?;
         store::write(data_dir, repo, number, "review.md", &report)?;
+        if needs_sign_in(&report) {
+            let _ = app.notification().builder().title(format!("Sign in needed in Chrome · {repo}#{number}"))
+                .body("pr-review stopped at a login. Sign in, then continue in the Claude tab.").show();
+        }
         store::write(data_dir, repo, number, "review.meta.json", &serde_json::to_string(&meta).unwrap())?;
     } else {
         let structured = res
@@ -500,6 +528,10 @@ fn run(
         .body(title)
         .show();
     Ok(())
+}
+
+fn needs_sign_in(text: &str) -> bool {
+    text.contains("SIGN-IN NEEDED:")
 }
 
 /// Fallback when structured output is missing: the first `{ ... }` block in the text.

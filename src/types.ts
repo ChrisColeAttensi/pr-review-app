@@ -110,6 +110,8 @@ export interface RunMeta {
   costUsd?: number;
   durationMs?: number;
   ok: boolean;
+  sessionId?: string | null;
+  resolvedModel?: string | null;
 }
 
 export interface Draft {
@@ -126,6 +128,7 @@ export interface PrState {
   reviewMeta?: RunMeta | null;
   insights?: Insights | null;
   insightsMeta?: RunMeta | null;
+  chatMeta?: RunMeta | null;
   drafts: Draft[];
 }
 

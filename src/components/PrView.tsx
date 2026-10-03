@@ -10,19 +10,18 @@ import { ReviewerList, ReviewerStack } from "./Reviewers";
 import { MergeButton, MergeCard, MergeDialog, useMergeInfo } from "./Merge";
 import { ReviewButton, ReviewDialog } from "./ReviewDialog";
 import type { SlackReason } from "./SlackPrompt";
-import { ChatTab } from "./ChatTab";
+import { ClaudeTab } from "./ChatTab";
 import { estimate, estimateTooltip, formatEstimate, type Estimate } from "../estimate";
 import type { Annotation, Draft, Insights, Pr, PrDetail, PrState } from "../types";
 import { TRAY, keys } from "../platform";
 
-type Tab = "overview" | "walkthrough" | "files" | "review" | "notes" | "claude";
+type Tab = "overview" | "walkthrough" | "files" | "claude" | "notes";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "walkthrough", label: "Walkthrough" },
   { id: "files", label: "Files" },
-  { id: "review", label: "pr-review" },
-  { id: "notes", label: "My notes" },
   { id: "claude", label: "Claude" },
+  { id: "notes", label: "My notes" },
 ];
 
 const norm = (p: string) => p.replace(/^(\.\/|a\/|b\/)/, "");
@@ -66,7 +65,18 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
     const s = await api.settings();
     await api.saveSettings({ ...s, allowChromeVerify: on });
   };
-  const runReview = () => jobs.start(pr.repo, pr.number, "review", undefined, chrome);
+  // Bumped when the Claude tab's thread is emptied, so it reloads.
+  const [thread, setThread] = useState(0);
+  const clearThread = async () => {
+    await api.clearThread(pr.repo, pr.number);
+    setState((s) => ({ ...s, review: null, reviewMeta: null, chatMeta: null }));
+    setThread((t) => t + 1);
+  };
+  // A re-run starts a clean thread: the old report and the chat that followed it go.
+  const runReview = async () => {
+    await clearThread();
+    jobs.start(pr.repo, pr.number, "review", undefined, chrome);
+  };
   // Start the (slow, first-time) Slack lookup while the user is still writing the
   // review, so the prompt afterwards is instant. The answer is cached on disk.
   const prefetchSlack = (reason: SlackReason) => {
@@ -193,7 +203,7 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
             </button>
             <button
               className={`primary ${running("review") ? "busy" : ""}`}
-              onClick={() => { setTab("review"); if (!running("review")) runReview(); }}
+              onClick={() => { setTab("claude"); if (!running("review")) runReview(); }}
             >
               {running("review") ? "Reviewing…" : state.review ? "↻ Re-run pr-review" : "▶ Run pr-review"}
               {!running("review") && <Est e={est.review} />}
@@ -220,10 +230,9 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
             <button key={t.id} className={tab === t.id ? "tab on" : "tab"} onClick={() => setTab(t.id)} title={keys(String(i + 1))}>
               {t.label}
               {t.id === "walkthrough" && running("insights") && <span className="spinner" />}
-              {t.id === "review" && running("review") && <span className="spinner" />}
-              {t.id === "review" && !running("review") && state.review && <span className="dot ok" />}
+              {t.id === "claude" && (running("review") || jobs.latest(pr.key, "chat")?.status === "running") && <span className="spinner" />}
+              {t.id === "claude" && !running("review") && jobs.latest(pr.key, "chat")?.status !== "running" && state.review && <span className="dot ok" />}
               {t.id === "notes" && state.drafts.length > 0 && <span className="count">{state.drafts.length}</span>}
-              {t.id === "claude" && jobs.latest(pr.key, "chat")?.status === "running" && <span className="spinner" />}
               {t.id === "files" && concerns > 0 && <span className="count warn">{concerns}</span>}
             </button>
           ))}
@@ -260,15 +269,15 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
       {jobs.error && <div className="banner error">{jobs.error}</div>}
       {[insightsJob, reviewJob].map((j) => j?.status === "failed" && (
         <div key={j.id} className="banner error row">
-          {j.kind === "review" ? "pr-review" : "Explain changes"} failed — see the log in the {j.kind === "review" ? "pr-review" : "Walkthrough"} tab.
+          {j.kind === "review" ? "pr-review" : "Explain changes"} failed — see the log in the {j.kind === "review" ? "Claude" : "Walkthrough"} tab.
           <span className="spacer" />
-          <button className="link" onClick={() => setTab(j.kind === "review" ? "review" : "walkthrough")}>Show log</button>
-          <button className="link" onClick={() => jobs.start(pr.repo, pr.number, j.kind)}>Retry</button>
+          <button className="link" onClick={() => setTab(j.kind === "review" ? "claude" : "walkthrough")}>Show log</button>
+          <button className="link" onClick={() => (j.kind === "review" ? runReview() : jobs.start(pr.repo, pr.number, j.kind))}>Retry</button>
         </div>
       ))}
       {err && <div className="banner error">{err}</div>}
 
-      <div className="pr-body">
+      <div className={tab === "claude" ? "pr-body chat-mode" : "pr-body"}>
         {tab === "overview" && (
           <Overview pr={pr} me={me} mergeCard={<MergeCard info={merge.info} err={merge.err} onMerge={() => { setMerging(true); prefetchSlack("merge"); }} />} detail={detail} insights={insights} state={state} stale={!!stale(state.insightsMeta?.headSha)}
             onExplain={() => { setTab("walkthrough"); jobs.start(pr.repo, pr.number, "insights"); }} explaining={running("insights")} goto={setTab} />
@@ -293,46 +302,9 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
         {tab === "files" && files && <FilesTab files={files} renderFile={renderFile} annotationsByPath={annotationsByPath} draftsByPath={draftsByPath} />}
         {tab === "files" && !files && <div className="muted pad">Loading diff…</div>}
 
-        {tab === "review" && (
-          <div className="review-tab">
-            <label className="check live-check" title="Starts claude with --chrome. pr-review only opens Chrome for changes the diff and CI can't settle.">
-              <input type="checkbox" checked={chrome} onChange={(e) => setChrome(e.target.checked)} />
-              Allow pr-review to verify in Chrome when needed <span className="muted small">(Claude in Chrome; it decides per PR)</span>
-            </label>
-            {reviewJob && (reviewJob.status === "running" || reviewJob.status === "failed") && <JobLog job={reviewJob} estimate={est.review} />}
-            {state.review ? (
-              <div className="report card">
-                <div className="report-meta muted">
-                  pr-review · {state.reviewMeta && timeAgo(state.reviewMeta.finishedAt)}
-                  {state.reviewMeta?.costUsd != null && ` · $${state.reviewMeta.costUsd.toFixed(2)}`}
-                  {state.reviewMeta?.durationMs != null && ` · ${Math.round(state.reviewMeta.durationMs / 60000)} min`}
-                  {stale(state.reviewMeta?.headSha) && <span className="badge warn">new commits since this review</span>}
-                  <span className="spacer" />
-                  <button className="link" onClick={() => navigator.clipboard.writeText(state.review!)}>Copy markdown</button>
-                </div>
-                <Markdown>{state.review}</Markdown>
-              </div>
-            ) : (
-              !running("review") && (
-                <div className="empty-cta">
-                  <p>
-                    Runs your <code>pr-review</code> skill headless in a throwaway worktree at the PR head. Nothing is posted,
-                    pushed or fixed — the report lands here.
-                  </p>
-                  <button className="primary" onClick={() => runReview()}>▶ Run pr-review <Est e={est.review} /></button>
-                </div>
-              )
-            )}
-            {reviewJob && reviewJob.status !== "running" && reviewJob.status !== "failed" && (
-              <details className="card">
-                <summary>Run log</summary>
-                <JobLog job={reviewJob} compact />
-              </details>
-            )}
-          </div>
+        {tab === "claude" && (
+          <ClaudeTab pr={pr} state={state} thread={thread} onClear={clearThread} chrome={chrome} setChrome={setChrome} runReview={runReview} reviewEst={est.review} Est={Est} />
         )}
-
-        {tab === "claude" && <ChatTab pr={pr} state={state} />}
         {tab === "notes" && <NotesTab pr={pr} drafts={state.drafts} onAdd={onAddDraft} onDelete={onDeleteDraft} onEdit={onEditDraft} />}
       </div>
     </div>
@@ -396,7 +368,7 @@ function Overview({ pr, me, mergeCard, detail, insights, state, stale, onExplain
           {state.review ? (
             <>
               <p className="verdict">{state.review.split("\n").find((l) => l.startsWith("#"))?.replace(/^#+\s*/, "")}</p>
-              <button className="link" onClick={() => goto("review")}>Read report →</button>
+              <button className="link" onClick={() => goto("claude")}>Read report →</button>
             </>
           ) : (
             <p className="muted small">Not run yet.</p>

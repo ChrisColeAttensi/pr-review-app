@@ -421,6 +421,13 @@ fn pr_chat(state: tauri::State<AppState>, repo: String, number: u64) -> Vec<stor
 }
 
 #[tauri::command]
+fn clear_thread(app: AppHandle, state: tauri::State<AppState>, repo: String, number: u64) -> Result<(), String> {
+    store::clear_thread(&state.data_dir, &repo, number)?;
+    tray::refresh(&app);
+    Ok(())
+}
+
+#[tauri::command]
 fn pr_index(state: tauri::State<AppState>) -> HashMap<String, store::IndexEntry> {
     store::index(&state.data_dir)
 }
@@ -604,6 +611,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
+            clear_thread,
             refresh,
             get_settings,
             save_settings,

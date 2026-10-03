@@ -32,6 +32,9 @@ pub struct RunMeta {
     pub session_id: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The model claude actually ran, e.g. `claude-opus-5-5` (the setting may be blank).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -41,6 +44,7 @@ pub struct PrState {
     pub review_meta: Option<RunMeta>,
     pub insights: Option<Value>,
     pub insights_meta: Option<RunMeta>,
+    pub chat_meta: Option<RunMeta>,
     pub drafts: Value,
 }
 
@@ -55,6 +59,7 @@ pub fn load(data: &Path, repo: &str, number: u64) -> PrState {
         review_meta: read_json(dir.join("review.meta.json")),
         insights: read_json(dir.join("insights.json")),
         insights_meta: read_json(dir.join("insights.meta.json")),
+        chat_meta: read_json(dir.join("chat.meta.json")),
         drafts: read_json(dir.join("drafts.json")).unwrap_or(Value::Array(vec![])),
     }
 }
@@ -110,12 +115,28 @@ pub fn push_chat(data: &Path, repo: &str, number: u64, msg: ChatMessage) {
 }
 
 /// The conversation to continue: the chat's own, else the pr-review run's, else Explain's.
+/// Empties the Claude tab: the chat, the pr-review report, and which session to resume.
+/// Explain's walkthrough stays, but its session is no longer resumed. Worktree edits stay too.
+pub fn clear_thread(data: &Path, repo: &str, number: u64) -> Result<(), String> {
+    let dir = pr_dir(data, repo, number);
+    for f in ["chat.json", "chat.meta.json", "review.md", "review.meta.json"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("thread-cleared-at"), crate::jobs::now_ms().to_string()).map_err(|e| e.to_string())
+}
+
 pub fn resumable(data: &Path, repo: &str, number: u64) -> Option<(String, String)> {
     let dir = pr_dir(data, repo, number);
-    ["chat.meta.json", "review.meta.json", "insights.meta.json"].iter().find_map(|f| {
-        let m: RunMeta = read_json(dir.join(f))?;
-        Some((m.session_id?, m.cwd?))
-    })
+    let cleared: u64 = std::fs::read_to_string(dir.join("thread-cleared-at")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    // The newest conversation: a pr-review re-run after chatting is what the chat continues from.
+    ["chat.meta.json", "review.meta.json", "insights.meta.json"]
+        .iter()
+        .filter_map(|f| read_json::<RunMeta>(dir.join(f)))
+        .filter(|m| m.finished_at > cleared)
+        .filter_map(|m| Some((m.finished_at, m.session_id?, m.cwd?)))
+        .max_by_key(|(t, _, _)| *t)
+        .map(|(_, sid, cwd)| (sid, cwd))
 }
 
 #[derive(Serialize)]

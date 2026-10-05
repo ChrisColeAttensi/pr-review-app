@@ -57,6 +57,9 @@ pub struct Settings {
     /// {first}, {name}, {title}, {url}, {repo}, {number} are filled in.
     pub slack_approve_template: String,
     pub slack_merge_template: String,
+    /// "draft": leave the message as a Slack draft and open it, so I press Send (Slack then
+    /// shows no "Sent using Claude" tag). "send": the connector sends it for me.
+    pub slack_delivery: String,
     /// Remove review worktrees unused for this many days (0 = only when the PR closes).
     pub worktree_retention_days: u64,
     /// Keep a PR I approved under "Review requested" this long, so I can merge it (0 = drop at once).
@@ -87,8 +90,9 @@ impl Default for Settings {
             approved_grace_minutes: 60,
             slack_on_approve: true,
             slack_on_merge: true,
-            slack_approve_template: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍".into(),
-            slack_merge_template: "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀".into(),
+            slack_approve_template: APPROVE_TEMPLATE.into(),
+            slack_merge_template: MERGE_TEMPLATE.into(),
+            slack_delivery: "draft".into(),
         }
     }
 }
@@ -102,11 +106,23 @@ pub fn expand_tilde(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
+// It's a DM, so no need to greet them by name.
+const APPROVE_TEMPLATE: &str = "I've approved your PR [{repo}#{number}: {title}]({url}) 👍";
+const MERGE_TEMPLATE: &str = "I've merged your PR [{repo}#{number}: {title}]({url}) 🚀";
+
 pub fn load(path: &PathBuf) -> Settings {
-    std::fs::read_to_string(path)
+    let mut s: Settings = std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Move untouched old defaults to the new ones; edited templates are left alone.
+    if s.slack_approve_template == "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍" {
+        s.slack_approve_template = APPROVE_TEMPLATE.into();
+    }
+    if s.slack_merge_template == "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀" {
+        s.slack_merge_template = MERGE_TEMPLATE.into();
+    }
+    s
 }
 
 pub fn save(path: &PathBuf, s: &Settings) -> Result<(), String> {

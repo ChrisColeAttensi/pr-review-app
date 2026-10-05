@@ -8,13 +8,17 @@ import { mod } from "../platform";
 /** Send without blocking: a toast tracks it, with Retry and Copy if it fails. */
 function sendInBackground(toasts: ReturnType<typeof useToasts>, login: string, user: SlackUser, message: string, replace?: number) {
   const first = user.name.split(/\s+/)[0];
-  const id = toasts.show({ text: `Sending Slack message to ${first}…`, tone: "info", busy: true }, replace);
+  const id = toasts.show({ text: `Preparing Slack message to ${first}…`, tone: "info", busy: true }, replace);
   api.slackSend(login, user, message).then(
-    (link) =>
-      toasts.show(
-        { text: `Sent to ${first} on Slack ✓`, tone: "ok", actions: link ? [{ label: "Open in Slack", run: () => openUrl(link) }] : [] },
-        id,
-      ),
+    ({ drafted, link }) => {
+      if (drafted) {
+        // Straight to the DM: the draft is in the box, one Enter sends it.
+        if (link) openUrl(link);
+        toasts.show({ text: `Draft ready in your DM with ${first}: press Enter in Slack to send ✓`, tone: "ok", actions: link ? [{ label: "Open in Slack", run: () => openUrl(link) }] : [] }, id);
+      } else {
+        toasts.show({ text: `Sent to ${first} on Slack ✓`, tone: "ok", actions: link ? [{ label: "Open in Slack", run: () => openUrl(link) }] : [] }, id);
+      }
+    },
     (e) =>
       toasts.show(
         {
@@ -110,14 +114,18 @@ export function SlackPrompt({ pr, reason, settings, onClose }: {
           <textarea rows={4} value={message} 
             onChange={(e) => { setMessage(e.target.value); setEdited(true); }}
             onKeyDown={(e) => { if (e.key === "Enter" && mod(e) && phase === "found") send(); }} />
-          <p className="muted small">Sent as you, through your Claude Slack connector. It sends in the background; a toast tells you when it's done.</p>
+          <p className="muted small">
+            {settings.slackDelivery === "send"
+              ? "Sent as you, through your Claude Slack connector (Slack tags it “Sent using Claude”). A toast tells you when it's done."
+              : "Put in your DM with them as a draft, and Slack opens on it: press Enter there to send. No “Sent using Claude” tag."}
+          </p>
           {err && <div className="banner error">{err}</div>}
         </div>
         <footer className="row end modal-foot">
           <button onClick={onClose}>Skip</button>
           <button onClick={copyAndOpen}>Copy & open Slack</button>
           <button className="primary" disabled={phase !== "found" || !message.trim()} onClick={send}>
-            Send
+            {settings.slackDelivery === "send" ? "Send" : "Draft in Slack"}
           </button>
         </footer>
       </div>

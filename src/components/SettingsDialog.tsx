@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Categories, Settings } from "../types";
@@ -114,7 +115,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Hide review requests that only come via a team (also in the sidebar as “Team requests”)</label>
             <label className="field">
-              <span>Keep PRs I approve listed for</span>
+              <span title="After you approve a PR, or once a PR is merged or closed">Keep approved and merged PRs listed for</span>
               <select value={s.approvedGraceMinutes} onChange={(e) => set({ approvedGraceMinutes: Number(e.target.value) })}>
                 <option value={0}>No time (drop at once)</option>
                 {[15, 60, 240, 1440].map((m) => <option key={m} value={m}>{m < 60 ? `${m} min` : m === 1440 ? "1 day" : `${m / 60} hour${m > 60 ? "s" : ""}`}</option>)}
@@ -188,8 +189,15 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <h3>Slack</h3>
             <p className="muted small">
               After you approve or merge someone else's PR, offer to DM them. Messages go out as you through your
-              Claude Slack connector; nothing is sent until you click Send.
+              Claude Slack connector; nothing goes out until you say so.
             </p>
+            <label className="field">
+              <span>Delivery</span>
+              <select value={s.slackDelivery} onChange={(e) => set({ slackDelivery: e.target.value as "draft" | "send" })}>
+                <option value="draft">Draft it in Slack, I press Enter (no “Sent using Claude” tag)</option>
+                <option value="send">Send it for me (Slack adds “Sent using Claude”)</option>
+              </select>
+            </label>
             <label className="check"><input type="checkbox" checked={s.slackOnApprove} onChange={(e) => set({ slackOnApprove: e.target.checked })} /> Offer after approving</label>
             <label className="check"><input type="checkbox" checked={s.slackOnMerge} onChange={(e) => set({ slackOnMerge: e.target.checked })} /> Offer after merging</label>
             <label className="field col">
@@ -206,8 +214,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="row">
               <button disabled={slackMsg === "Sending…"} onClick={() => {
                 setSlackMsg("Sending…");
-                api.slackTest().then(() => setSlackMsg("Sent ✓ — check your Slack DMs with yourself.")).catch((e) => setSlackMsg(String(e)));
-              }}>Send test message to myself</button>
+                api.slackTest().then(({ drafted, link }) => {
+                  if (drafted && link) openUrl(link);
+                  setSlackMsg(drafted ? "Draft left in your DM with yourself ✓ — press Enter in Slack to send it and see how it looks." : "Sent ✓ — check your Slack DMs with yourself.");
+                }).catch((e) => setSlackMsg(String(e)));
+              }}>{s.slackDelivery === "send" ? "Send test message to myself" : "Draft a test message to myself"}</button>
               {slackMsg && <span className="muted small">{slackMsg}</span>}
             </div>
           </section>

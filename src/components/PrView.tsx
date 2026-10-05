@@ -259,6 +259,11 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
         <MergeDialog pr={pr} info={merge.info} onClose={() => setMerging(false)}
           onMerged={(m) => { setMerging(false); setMerged(m); merge.reload(); if (m === "Merged") offerSlack("merge"); }} />
       )}
+      {pr.closedState && (
+        <div className={`banner ${pr.closedState === "MERGED" ? "merged" : "warn"}`}>
+          {pr.closedState === "MERGED" ? "✓ This PR has been merged." : "This PR was closed without merging."} It leaves the list shortly.
+        </div>
+      )}
       {pr.ignored && (
         <div className="banner warn row">
           You're ignoring this PR: it's hidden from the {TRAY} and notifications.

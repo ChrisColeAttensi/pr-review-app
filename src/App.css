@@ -502,3 +502,11 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 .chat-log .report > summary::-webkit-details-marker { display: none; }
 .run-log { margin-top: 12px; }
 .sign-in { margin: 0 0 8px; align-items: center; gap: 10px; }
+
+/* Just merged / closed: unmistakable, and visually out of the way. */
+.pr-item.closed .pr-item-title { color: var(--fg-muted); }
+.pr-item.closed .avatar { filter: grayscale(1); opacity: .6; }
+.state-pill { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; padding: 1px 7px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; color: #fff; }
+.state-merged { background: #8250df; }
+.state-closed { background: #6e7781; }
+.banner.merged { background: rgba(130, 80, 223, .15); color: #a475f9; border-color: rgba(130, 80, 223, .4); }

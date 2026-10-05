@@ -104,6 +104,10 @@ pub struct Pr {
     /// I approved it in the app recently; kept under "Review requested" for the grace period.
     #[serde(default)]
     pub just_approved: bool,
+    /// MERGED or CLOSED: it left the open lists since the last fetch. Kept briefly so the
+    /// change is visible instead of the row just vanishing.
+    #[serde(default)]
+    pub closed_state: Option<String>,
 }
 
 /// `reviewDecision` is null in repos without required reviews, so fall back to the
@@ -225,6 +229,7 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
         needs_re_review,
         needs_action: false,
         just_approved: false,
+        closed_state: None,
         ignored: false,
         team_only: false,
         via_teams: vec![],
@@ -325,6 +330,13 @@ pub fn fetch_all(settings: &Settings, grace: &[String]) -> FetchResult {
     }
     prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     FetchResult { me, prs, errors }
+}
+
+/// OPEN, MERGED or CLOSED.
+pub fn pr_state(repo: &str, number: u64) -> Option<String> {
+    let out = shell::run("gh", &["pr", "view", &number.to_string(), "-R", repo, "--json", "state", "--jq", ".state"], None).ok()?;
+    let s = out.trim().to_string();
+    (!s.is_empty()).then_some(s)
 }
 
 pub fn pr_detail(repo: &str, number: u64) -> Result<Value, String> {

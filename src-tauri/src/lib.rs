@@ -151,6 +151,8 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         let mut last_cleanup: Option<Instant> = None;
+        // PRs that left the open lists, by key: (last known PR with closed_state set, when).
+        let mut gone: HashMap<String, (github::Pr, u64)> = HashMap::new();
         loop {
             let s = state.settings.lock().unwrap().clone();
             {
@@ -166,6 +168,27 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
                 first_run = false;
                 let _ = std::fs::write(&seen_path, serde_json::to_string(&seen).unwrap_or_default());
             }
+            // A PR that vanished was merged or closed (or I was un-requested). Ask which,
+            // and keep merged/closed ones on show for the grace period.
+            let window = s.approved_grace_minutes * 60_000;
+            let now = jobs::now_ms();
+            if res.errors.is_empty() && window > 0 {
+                let prev: Vec<github::Pr> = state.snapshot.lock().unwrap().prs.iter().filter(|p| p.closed_state.is_none()).cloned().collect();
+                for p in prev {
+                    if res.prs.iter().any(|x| x.key == p.key) || gone.contains_key(&p.key) {
+                        continue;
+                    }
+                    if let Some(st) = github::pr_state(&p.repo, p.number).filter(|st| st != "OPEN") {
+                        let mut p = p;
+                        p.closed_state = Some(st);
+                        p.needs_action = false;
+                        p.just_approved = false;
+                        gone.insert(p.key.clone(), (p, now));
+                    }
+                }
+            }
+            gone.retain(|k, (_, at)| now.saturating_sub(*at) < window && !res.prs.iter().any(|x| &x.key == k));
+            res.prs.extend(gone.values().map(|(p, _)| p.clone()));
             let snap = {
                 let mut snap = state.snapshot.lock().unwrap();
                 *snap = Snapshot {
@@ -183,7 +206,7 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
             if !snap.loading && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
                 last_cleanup = Some(Instant::now());
                 let app2 = app.clone();
-                let open: HashSet<String> = snap.prs.iter().map(|p| p.key.clone()).collect();
+                let open: HashSet<String> = snap.prs.iter().filter(|p| p.closed_state.is_none()).map(|p| p.key.clone()).collect();
                 std::thread::spawn(move || {
                     let state = app2.state::<AppState>();
                     let days = state.settings.lock().unwrap().worktree_retention_days;
@@ -322,7 +345,7 @@ async fn cleanup_worktrees(app: AppHandle, everything: bool) -> Result<cleanup::
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let days = state.settings.lock().unwrap().worktree_retention_days;
-        let open: HashSet<String> = state.snapshot.lock().unwrap().prs.iter().map(|p| p.key.clone()).collect();
+        let open: HashSet<String> = state.snapshot.lock().unwrap().prs.iter().filter(|p| p.closed_state.is_none()).map(|p| p.key.clone()).collect();
         cleanup::run(&state.data_dir, days, &open, &busy_keys(&state), everything)
     })
     .await
@@ -385,7 +408,7 @@ async fn slack_lookup(app: AppHandle, repo: String, number: u64, login: String, 
 }
 
 #[tauri::command]
-async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, message: String) -> Result<String, String> {
+async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, message: String) -> Result<slack::Sent, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap().clone();
@@ -396,7 +419,7 @@ async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, messa
 }
 
 #[tauri::command]
-async fn slack_test(app: AppHandle) -> Result<String, String> {
+async fn slack_test(app: AppHandle) -> Result<slack::Sent, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let s = app.state::<AppState>().settings.lock().unwrap().clone();
         slack::send_test(&s)

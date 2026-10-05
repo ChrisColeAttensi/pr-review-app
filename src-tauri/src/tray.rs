@@ -11,7 +11,10 @@ const MAX_ROWS: usize = 10;
 const TITLE_CHARS: usize = 44;
 
 pub fn visible(p: &Pr, s: &Settings) -> bool {
-    !p.ignored && !(p.team_only && s.direct_requests_only) && (s.show_drafts || !p.is_draft) && (!s.actionable_only || p.needs_action)
+    !p.ignored
+        && !(p.team_only && s.direct_requests_only)
+        && (s.show_drafts || !p.is_draft)
+        && (!s.actionable_only || p.needs_action || p.closed_state.is_some())
 }
 
 fn has(p: &Pr, c: &str) -> bool {
@@ -57,6 +60,9 @@ fn repo_ref(p: &Pr) -> String {
 /// Where a requested review stands on this machine, as (icon, words, sort rank).
 /// Rank: findings to act on first, then reviewed, then in progress, then untouched.
 fn request_status(p: &Pr, e: Option<&store::IndexEntry>, running: bool) -> (&'static str, String, u8) {
+    if let Some(st) = closed(p) {
+        return st;
+    }
     if running {
         return ("⏳", "Claude working".into(), 2);
     }
@@ -85,8 +91,21 @@ fn request_status(p: &Pr, e: Option<&store::IndexEntry>, running: bool) -> (&'st
     ("○", "not started".into(), 4)
 }
 
+/// Merged or closed since it was last open: shown last, then dropped after the grace period.
+fn closed(p: &Pr) -> Option<(&'static str, String, u8)> {
+    match p.closed_state.as_deref()? {
+        "MERGED" => Some(("🟣", "merged".into(), 9)),
+        _ => Some(("⚫", "closed".into(), 9)),
+    }
+}
+
 /// My PR's next step, as (icon, words, sort rank).
 fn my_status(p: &Pr) -> (&'static str, &'static str, u8) {
+    match p.closed_state.as_deref() {
+        Some("MERGED") => return ("🟣", "merged", 9),
+        Some(_) => return ("⚫", "closed", 9),
+        None => {}
+    }
     let ci = github::ci_failed(p);
     match github::approval(p) {
         "APPROVED" if !ci => ("🟢", "ready to merge", 0),
@@ -133,13 +152,15 @@ fn rebuild(app: &AppHandle) {
     mine.sort_by_key(|p| my_status(p).2);
 
     // The badge is the review-request count, matching the first section's heading.
-    let n = requested.len();
+    let open = |v: &Vec<&Pr>| v.iter().filter(|p| p.closed_state.is_none()).count();
+    let n = open(&requested);
     let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
+    let mine_open = open(&mine);
     let ready = mine.iter().filter(|p| my_status(p).2 == 0).count();
     let _ = tray.set_tooltip(Some(format!(
         "PR Review — {} review request{}, {} of your PRs ready to merge",
-        requested.len(),
-        if requested.len() == 1 { "" } else { "s" },
+        n,
+        if n == 1 { "" } else { "s" },
         ready
     )));
 
@@ -147,8 +168,9 @@ fn rebuild(app: &AppHandle) {
         let item = |id: String, text: String, enabled: bool| MenuItem::with_id(app, id, text, enabled, None::<&str>);
         let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![];
 
-        let mut section = |title: &str, rows: Vec<(String, String)>, empty: &str, total: usize| -> tauri::Result<()> {
-            items.push(Box::new(item(format!("h:{title}"), format!("{}  ·  {total}", title.to_uppercase()), false)?));
+        // `count` is open PRs only (it matches the badge); `total` includes just-merged rows.
+        let mut section = |title: &str, rows: Vec<(String, String)>, empty: &str, count: usize, total: usize| -> tauri::Result<()> {
+            items.push(Box::new(item(format!("h:{title}"), format!("{}  ·  {count}", title.to_uppercase()), false)?));
             if rows.is_empty() {
                 items.push(Box::new(item(format!("e:{title}"), format!("      {empty}"), false)?));
             }
@@ -170,7 +192,7 @@ fn rebuild(app: &AppHandle) {
                 (p.key.clone(), row(icon, &p.title, &format!("{} · {} · {words}", repo_ref(p), age(&p.created_at))))
             })
             .collect();
-        section("Review requested", req_rows, "Nothing waiting on you 🎉", requested.len())?;
+        section("Review requested", req_rows, "Nothing waiting on you 🎉", n, requested.len())?;
 
         let my_rows = mine
             .iter()
@@ -181,7 +203,7 @@ fn rebuild(app: &AppHandle) {
             })
             .collect();
         let empty = if s.actionable_only { "Nothing to act on" } else { "No open PRs" };
-        section("My PRs", my_rows, empty, mine.len())?;
+        section("My PRs", my_rows, empty, mine_open, mine.len())?;
 
         let updated = if fetched_at == 0 {
             "Checking GitHub…".to_string()

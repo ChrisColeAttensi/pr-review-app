@@ -75,7 +75,7 @@ export interface ViewFilter {
 
 /** Same rule as the tray menu, plus the local "show ignored" escape hatch. */
 export const isVisible = (p: Pr, v: ViewFilter) =>
-  (v.showIgnored ? true : !p.ignored) && !(v.hideTeam && p.teamOnly) && (v.showDrafts || !p.isDraft) && (!v.actionableOnly || p.needsAction || !!p.ignored);
+  (v.showIgnored ? true : !p.ignored) && !(v.hideTeam && p.teamOnly) && (v.showDrafts || !p.isDraft) && (!v.actionableOnly || p.needsAction || !!p.ignored || !!p.closedState);
 
 export function orderedPrs(prs: Pr[], filter: string, view: ViewFilter): Pr[] {
   const f = filter.toLowerCase();
@@ -147,27 +147,33 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
       </div>
       <div className="side-list">
         {SECTIONS.map((s) => {
-          const items = snap.prs.filter((p) => sectionOf(p) === s.id && match(p));
+          // Just-merged/closed rows sink to the bottom of their section.
+          const items = snap.prs.filter((p) => sectionOf(p) === s.id && match(p)).sort((a, b) => Number(!!a.closedState) - Number(!!b.closedState));
           if (!items.length) return null;
           return (
             <div key={s.id} className="section">
               <div className="section-head" onClick={() => setCollapsed({ ...collapsed, [s.id]: !collapsed[s.id] })}>
                 <span>{collapsed[s.id] ? "▸" : "▾"} {s.label}</span>
-                <span className="count">{items.length}</span>
+                <span className="count">{items.filter((p) => !p.closedState).length}</span>
               </div>
               {!collapsed[s.id] &&
                 items.map((p) => (
-                  <div key={p.key} className={`pr-item ${selected === p.key ? "sel" : ""} ${p.ignored ? "ignored" : ""}`}
+                  <div key={p.key} className={`pr-item ${selected === p.key ? "sel" : ""} ${p.ignored ? "ignored" : ""} ${p.closedState ? "closed" : ""}`}
                     onClick={() => onSelect(p.key)}
                     onContextMenu={(e) => { e.preventDefault(); showContextMenu(p, (k) => start(p.repo, p.number, k, undefined, k === "review" && (settings?.allowChromeVerify ?? true))); }}>
                     <img className="avatar" src={p.authorAvatar} alt="" />
                     <div className="pr-item-main">
                       <div className="pr-item-title">
+                        {p.closedState && (
+                          <span className={`state-pill state-${p.closedState.toLowerCase()}`} title="Leaves the list after the grace period (Settings → Monitoring)">
+                            {p.closedState === "MERGED" ? "✓ Merged" : "Closed"}
+                          </span>
+                        )}
                         {p.ignored && <span className="badge tiny">ignored</span>}
                         {p.isDraft && <span className="badge tiny">draft</span>}
                         {p.title}
                       </div>
-                      {s.id === "mine" && (
+                      {s.id === "mine" && !p.closedState && (
                         <span className={`approval approval-${approvalOf(p)}`}>
                           {APPROVAL_LABEL[approvalOf(p)]}
                           {(p.ci === "FAILURE" || p.ci === "ERROR") && <span className="approval-changes"> · CI failing</span>}

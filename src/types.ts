@@ -33,6 +33,7 @@ export interface Pr {
   needsReReview: boolean;
   needsAction: boolean;
   justApproved?: boolean;
+  closedState?: "MERGED" | "CLOSED" | null;
   ignored?: boolean;
   teamOnly?: boolean;
   viaTeams?: string[];
@@ -77,6 +78,7 @@ export interface Settings {
   slackOnMerge: boolean;
   slackApproveTemplate: string;
   slackMergeTemplate: string;
+  slackDelivery: "draft" | "send";
 }
 
 export type AnnotationKind = "explain" | "why" | "concern" | "question" | "suggestion" | "nit";

@@ -114,6 +114,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Hide review requests that only come via a team (also in the sidebar as “Team requests”)</label>
             <label className="field">
+              <span>Keep PRs I approve listed for</span>
+              <select value={s.approvedGraceMinutes} onChange={(e) => set({ approvedGraceMinutes: Number(e.target.value) })}>
+                <option value={0}>No time (drop at once)</option>
+                {[15, 60, 240, 1440].map((m) => <option key={m} value={m}>{m < 60 ? `${m} min` : m === 1440 ? "1 day" : `${m / 60} hour${m > 60 ? "s" : ""}`}</option>)}
+              </select>
+            </label>
+            <label className="field">
               <span>Check every</span>
               <select value={s.pollIntervalSecs} onChange={(e) => set({ pollIntervalSecs: Number(e.target.value) })}>
                 {[60, 120, 300, 600, 1800].map((n) => <option key={n} value={n}>{n < 120 ? `${n}s` : `${n / 60} min`}</option>)}

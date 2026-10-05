@@ -101,6 +101,9 @@ pub struct Pr {
     /// Teams asked to review, as `org/slug`.
     #[serde(default)]
     pub via_teams: Vec<String>,
+    /// I approved it in the app recently; kept under "Review requested" for the grace period.
+    #[serde(default)]
+    pub just_approved: bool,
 }
 
 /// `reviewDecision` is null in repos without required reviews, so fall back to the
@@ -221,6 +224,7 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
         categories: vec![],
         needs_re_review,
         needs_action: false,
+        just_approved: false,
         ignored: false,
         team_only: false,
         via_teams: vec![],
@@ -233,7 +237,8 @@ pub struct FetchResult {
     pub errors: Vec<String>,
 }
 
-pub fn fetch_all(settings: &Settings) -> FetchResult {
+/// `grace`: keys of PRs I approved recently, kept in the list even though no longer requested.
+pub fn fetch_all(settings: &Settings, grace: &[String]) -> FetchResult {
     let base = "is:pr is:open archived:false";
     let mut queries: Vec<(&str, String)> = vec![];
     let c = &settings.categories;
@@ -282,6 +287,30 @@ pub fn fetch_all(settings: &Settings) -> FetchResult {
                 }
             }
             Err(e) => errors.push(format!("{cat}: {e}")),
+        }
+    }
+    // Approved PRs leave `review-requested:@me`; bring the recent ones back.
+    if c.review_requested && grace.iter().any(|k| !by_key.get(k).is_some_and(|p| p.categories.iter().any(|c| c == "reviewRequested"))) {
+        match search(&format!("{base} reviewed-by:@me -author:@me")) {
+            Ok((login, nodes)) => {
+                if me.is_empty() {
+                    me = login;
+                }
+                for n in nodes {
+                    let Some(pr) = to_pr(&n, &me) else { continue };
+                    if !grace.contains(&pr.key) {
+                        continue;
+                    }
+                    let p = by_key.entry(pr.key.clone()).or_insert(pr);
+                    if !p.categories.iter().any(|c| c == "reviewRequested") {
+                        p.categories.push("reviewRequested".into());
+                        // Counts as direct: it was asked of me, so the team filter mustn't hide it.
+                        p.categories.push("directRequest".into());
+                        p.just_approved = true;
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("approved: {e}")),
         }
     }
     let direct_ok = !errors.iter().any(|e| e.starts_with("directRequest"));

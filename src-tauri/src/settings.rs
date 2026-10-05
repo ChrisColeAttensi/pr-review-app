@@ -59,6 +59,8 @@ pub struct Settings {
     pub slack_merge_template: String,
     /// Remove review worktrees unused for this many days (0 = only when the PR closes).
     pub worktree_retention_days: u64,
+    /// Keep a PR I approved under "Review requested" this long, so I can merge it (0 = drop at once).
+    pub approved_grace_minutes: u64,
 }
 
 impl Default for Settings {
@@ -82,6 +84,7 @@ impl Default for Settings {
             auto_insights: false,
             allow_chrome_verify: true,
             worktree_retention_days: 7,
+            approved_grace_minutes: 60,
             slack_on_approve: true,
             slack_on_merge: true,
             slack_approve_template: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍".into(),

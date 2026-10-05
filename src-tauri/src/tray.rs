@@ -60,6 +60,9 @@ fn request_status(p: &Pr, e: Option<&store::IndexEntry>, running: bool) -> (&'st
     if running {
         return ("⏳", "Claude working".into(), 2);
     }
+    if p.just_approved {
+        return ("👍", "you approved · merge?".into(), 1);
+    }
     if let Some(e) = e {
         if let Some(v) = &e.verdict {
             let stale = e.review_head.as_deref() != Some(p.head_sha.as_str());

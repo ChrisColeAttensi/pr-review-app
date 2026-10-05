@@ -42,9 +42,10 @@ function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
   if (!e) e = { drafts: 0, chat: 0 };
   const chip = e.verdict ? verdictChip(e.verdict) : null;
   const stale = !!e.reviewHead && e.reviewHead !== p.headSha;
-  if (!chip && !e.insightsHead && !e.drafts && !e.chat && !p.teamOnly) return null;
+  if (!chip && !e.insightsHead && !e.drafts && !e.chat && !p.teamOnly && !p.justApproved) return null;
   return (
     <div className="pr-flags">
+      {p.justApproved && <span className="flag tone-ok" title="You approved this recently. It stays here for a while so you can merge it (Settings → Monitoring).">👍 approved</span>}
       {chip && (
         <span className={`flag tone-${stale ? "muted" : chip.tone}`} title={`pr-review: ${e.verdict}${stale ? " (new commits since)" : ""}`}>
           {chip.text}{stale && " ↻"}

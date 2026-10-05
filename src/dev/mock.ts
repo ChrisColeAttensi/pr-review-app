@@ -22,7 +22,7 @@ export function installMock() {
     notifyCategories: { reviewRequested: true, reReview: true, watched: false, mine: true },
     actionableOnly: true, showDrafts: false, directRequestsOnly: false, watchedRepos: [], repoRoots: ["~/Developer"], repoPaths: {},
     claudePath: "", reviewCommand: "/chriscole-skills:pr-review {url}", permissionMode: "auto",
-    reviewModel: "", insightsModel: "", autoInsights: false, allowChromeVerify: true, worktreeRetentionDays: 7,
+    reviewModel: "", insightsModel: "", autoInsights: false, allowChromeVerify: true, worktreeRetentionDays: 7, approvedGraceMinutes: 60,
     slackOnApprove: true, slackOnMerge: true,
     slackApproveTemplate: "Hey {first}, I've approved your PR [{repo}#{number}: {title}]({url}) 👍",
     slackMergeTemplate: "Hey {first}, I've merged your PR [{repo}#{number}: {title}]({url}) 🚀",

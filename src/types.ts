@@ -32,6 +32,7 @@ export interface Pr {
   categories: Category[];
   needsReReview: boolean;
   needsAction: boolean;
+  justApproved?: boolean;
   ignored?: boolean;
   teamOnly?: boolean;
   viaTeams?: string[];
@@ -71,6 +72,7 @@ export interface Settings {
   autoInsights: boolean;
   allowChromeVerify: boolean;
   worktreeRetentionDays: number;
+  approvedGraceMinutes: number;
   slackOnApprove: boolean;
   slackOnMerge: boolean;
   slackApproveTemplate: string;

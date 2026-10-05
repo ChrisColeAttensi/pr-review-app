@@ -1,5 +1,6 @@
 mod cleanup;
 mod github;
+mod grace;
 mod ignore;
 mod jobs;
 mod repos;
@@ -157,7 +158,8 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
                 snap.loading = true;
                 let _ = app.emit("prs-updated", snap.clone());
             }
-            let mut res = github::fetch_all(&s);
+            let grace = if s.approved_grace_minutes > 0 { grace::active(&state.data_dir, s.approved_grace_minutes) } else { vec![] };
+            let mut res = github::fetch_all(&s, &grace);
             ignore::apply(&state.data_dir, &mut res.prs);
             if res.errors.is_empty() || !res.prs.is_empty() {
                 diff_and_notify(&app, &s, &res.me, &res.prs, &mut seen, first_run);
@@ -361,6 +363,9 @@ async fn merge_pr(app: AppHandle, request: github::MergeRequest) -> Result<Strin
 async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let out = github::submit_review(&request)?;
+        if request.event == "approve" {
+            grace::record(&app.state::<AppState>().data_dir, &format!("{}#{}", request.repo, request.number));
+        }
         let _ = app.state::<AppState>().wake.lock().unwrap().send(());
         Ok(out)
     })

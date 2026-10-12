@@ -271,13 +271,30 @@ pub fn fetch_all(settings: &Settings, grace: &[String]) -> FetchResult {
         queries.push(("mine", format!("{base} author:@me")));
     }
 
+    // Approved PRs leave `review-requested:@me`; this brings the recent ones back.
+    let want_grace = c.review_requested && !grace.is_empty();
+    if want_grace {
+        queries.push(("approved", format!("{base} reviewed-by:@me -author:@me")));
+    }
+
+    // Each search is a `gh` round trip of a second or more: run them side by side.
+    let results: Vec<(&str, Result<(String, Vec<Value>), String>)> = std::thread::scope(|sc| {
+        let handles: Vec<_> = queries.iter().map(|(cat, q)| (*cat, sc.spawn(move || search(q)))).collect();
+        handles.into_iter().map(|(cat, h)| (cat, h.join().unwrap_or_else(|_| Err("search thread panicked".into())))).collect()
+    });
+
     let mut me = String::new();
     let mut by_key: BTreeMap<String, Pr> = BTreeMap::new();
     let mut errors = vec![];
-    for (cat, q) in queries {
-        match search(&q) {
+    let mut approved_nodes: Vec<Value> = vec![];
+    for (cat, r) in results {
+        match r {
             Ok((login, nodes)) => {
                 me = login;
+                if cat == "approved" {
+                    approved_nodes = nodes;
+                    continue;
+                }
                 for n in nodes {
                     let Some(pr) = to_pr(&n, &me) else { continue };
                     // Only PRs whose head moved since my review count as re-review.
@@ -294,28 +311,25 @@ pub fn fetch_all(settings: &Settings, grace: &[String]) -> FetchResult {
             Err(e) => errors.push(format!("{cat}: {e}")),
         }
     }
-    // Approved PRs leave `review-requested:@me`; bring the recent ones back.
-    if c.review_requested && grace.iter().any(|k| !by_key.get(k).is_some_and(|p| p.categories.iter().any(|c| c == "reviewRequested"))) {
-        match search(&format!("{base} reviewed-by:@me -author:@me")) {
-            Ok((login, nodes)) => {
-                if me.is_empty() {
-                    me = login;
-                }
-                for n in nodes {
-                    let Some(pr) = to_pr(&n, &me) else { continue };
-                    if !grace.contains(&pr.key) {
-                        continue;
-                    }
-                    let p = by_key.entry(pr.key.clone()).or_insert(pr);
-                    if !p.categories.iter().any(|c| c == "reviewRequested") {
-                        p.categories.push("reviewRequested".into());
-                        // Counts as direct: it was asked of me, so the team filter mustn't hide it.
-                        p.categories.push("directRequest".into());
-                        p.just_approved = true;
-                    }
-                }
+    if want_grace {
+        for n in approved_nodes {
+            let Some(pr) = to_pr(&n, &me) else { continue };
+            if !grace.contains(&pr.key) {
+                continue;
             }
-            Err(e) => errors.push(format!("approved: {e}")),
+            let p = by_key.entry(pr.key.clone()).or_insert(pr);
+            if !p.categories.iter().any(|c| c == "reviewRequested") {
+                p.categories.push("reviewRequested".into());
+                // Counts as direct: it was asked of me, so the team filter mustn't hide it.
+                p.categories.push("directRequest".into());
+            }
+        }
+        // Search lags GitHub by a minute or so: a PR can still look requested right after
+        // approving. Either way, it's one I just approved.
+        for k in grace {
+            if let Some(p) = by_key.get_mut(k) {
+                p.just_approved = true;
+            }
         }
     }
     let direct_ok = !errors.iter().any(|e| e.starts_with("directRequest"));

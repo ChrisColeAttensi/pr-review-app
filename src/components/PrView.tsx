@@ -115,6 +115,19 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
       .catch((e) => !dead && setErr(String(e)));
     return () => { dead = true; };
   }, [pr.key, pr.headSha]);
+  // Checks move on their own: reload them when the list sees CI change, and every 20s while any run.
+  const checksRunning = (detail?.statusCheckRollup ?? []).some((c) => checkState(c) === "running");
+  useEffect(() => {
+    let dead = false;
+    const reload = () => api.detail(pr.repo, pr.number).then((d) => !dead && setDetail(d)).catch(() => {});
+    if (detail) reload();
+    return () => { dead = true; };
+  }, [pr.ci]);
+  useEffect(() => {
+    if (!checksRunning) return;
+    const t = setInterval(() => api.detail(pr.repo, pr.number).then(setDetail).catch(() => {}), 20_000);
+    return () => clearInterval(t);
+  }, [checksRunning, pr.key]);
 
   useEffect(() => {
     api.state(pr.repo, pr.number).then(setState);
@@ -222,7 +235,7 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
           <span className="muted">{pr.changedFiles} files · updated {timeAgo(pr.updatedAt)}</span>
           <ReviewerStack pr={pr} me={me} />
           {pr.isDraft && <span className="badge">Draft</span>}
-          {pr.ci && <span className={`badge ci-${pr.ci.toLowerCase()}`}>CI {pr.ci.toLowerCase()}</span>}
+          {pr.ci && <span className={`badge ci-${pr.ci.toLowerCase()}`}>CI {pr.ci === "PENDING" || pr.ci === "EXPECTED" ? "running" : pr.ci.toLowerCase()}</span>}
           {pr.reviewDecision && <span className="badge">{pr.reviewDecision.replace("_", " ").toLowerCase()}</span>}
         </div>
         <nav className="tabs">
@@ -316,12 +329,24 @@ export function PrView({ pr, me, tab, setTab, onSlack }: {
   );
 }
 
+type Check = NonNullable<PrDetail["statusCheckRollup"]>[number];
+/** One word per check: success, failure, running, or skipped/neutral. */
+function checkState(c: Check): "success" | "failure" | "running" | "other" {
+  const v = (c.conclusion || c.state || "").toUpperCase();
+  if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(v)) return "failure";
+  if (v === "SUCCESS") return "success";
+  if (!c.conclusion && ["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"].includes((c.status || c.state || "").toUpperCase())) return "running";
+  if (v === "PENDING" || v === "EXPECTED") return "running";
+  return "other";
+}
+
 function Overview({ pr, me, mergeCard, detail, insights, state, stale, onExplain, explaining, goto }: {
   pr: Pr; me: string; mergeCard: React.ReactNode; detail?: PrDetail; insights?: Insights | null; state: PrState; stale: boolean;
   onExplain: () => void; explaining: boolean; goto: (t: Tab) => void;
 }) {
   const checks = detail?.statusCheckRollup ?? [];
-  const failing = checks.filter((c) => ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"].includes((c.conclusion || c.state || "").toUpperCase()));
+  const failing = checks.filter((c) => checkState(c) === "failure");
+  const runningChecks = checks.filter((c) => checkState(c) === "running");
   return (
     <div className="overview">
       <div className="col main">
@@ -380,16 +405,17 @@ function Overview({ pr, me, mergeCard, detail, insights, state, stale, onExplain
           )}
         </div>
         <div className="card">
-          <h3>Checks {failing.length > 0 && <span className="badge ci-failure">{failing.length} failing</span>}</h3>
+          <h3>Checks {failing.length > 0 && <span className="badge ci-failure">{failing.length} failing</span>}
+            {runningChecks.length > 0 && <span className="badge ci-pending">{runningChecks.length} running</span>}</h3>
           {checks.length === 0 && <p className="muted small">No checks.</p>}
           <ul className="checks">
             {checks.map((c, i) => {
-              const st = (c.conclusion || c.state || c.status || "").toLowerCase();
+              const st = checkState(c);
               const url = c.detailsUrl || c.targetUrl;
               return (
                 <li key={i} className={`check ck-${st}`}>
                   <span className="dot" /> {url ? <a onClick={() => openUrl(url)}>{c.name || c.context}</a> : c.name || c.context}
-                  <span className="muted small"> {st}</span>
+                  <span className="muted small"> {st === "running" ? "running…" : (c.conclusion || c.state || c.status || "").toLowerCase()}</span>
                 </li>
               );
             })}

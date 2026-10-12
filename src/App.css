@@ -218,6 +218,8 @@ textarea { width: 100%; min-height: 70px; resize: vertical; }
 .checks li, .commits li { padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .check .dot { margin: 0 6px 0 0; }
 .ck-success .dot { background: var(--add); }
+.ck-running .dot { background: var(--warn); }
+.ck-other .dot { background: var(--fg-muted); }
 .ck-failure .dot, .ck-error .dot, .ck-timed_out .dot { background: var(--del); }
 .ck-pending .dot, .ck-in_progress .dot, .ck-queued .dot { background: var(--warn); }
 .comment { border-top: 1px solid var(--border); padding: 8px 0; }
@@ -510,3 +512,13 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 .state-merged { background: #8250df; }
 .state-closed { background: #6e7781; }
 .banner.merged { background: rgba(130, 80, 223, .15); color: #a475f9; border-color: rgba(130, 80, 223, .4); }
+
+/* CI in progress: a pulsing amber dot with a label, so it reads as "running", not "warning". */
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.75); } }
+.ci-running { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: var(--warn); }
+.ci-running .ci-dot, .ck-running .dot, .badge.ci-pending::before { animation: pulse 1.2s ease-in-out infinite; }
+.badge.ci-pending::before, .badge.ci-expected::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 5px; vertical-align: 1px; }
+.ck-running { font-weight: 600; }
+/* Copy sits in its own strip under the reply, never over the text. */
+.bubble-assistant { padding-bottom: 24px; }
+.bubble .copy { top: auto; bottom: 4px; right: 10px; }

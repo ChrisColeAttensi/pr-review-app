@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { parseLog, useJobs } from "../jobs";
+import { parseLog, useJobLines, useJobs } from "../jobs";
 import type { JobInfo } from "../types";
 import { estimateTooltip, formatDuration, type Estimate } from "../estimate";
 
@@ -42,7 +42,8 @@ function useElapsed(start: number, running: boolean) {
 }
 
 export function JobLog({ job, compact, estimate }: { job: JobInfo; compact?: boolean; estimate?: Estimate }) {
-  const { lines, cancel } = useJobs();
+  const { cancel } = useJobs();
+  const lines = useJobLines();
   const entries = useMemo(() => parseLog(lines[job.id] ?? []), [lines, job.id]);
   const running = job.status === "running";
   const elapsed = useElapsed(job.startedAt, running);

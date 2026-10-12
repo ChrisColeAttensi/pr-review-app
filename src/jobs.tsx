@@ -6,7 +6,6 @@ import type { HistoryRun } from "./estimate";
 
 interface JobsCtx {
   jobs: JobInfo[];
-  lines: Record<string, string[]>;
   start: (repo: string, number: number, kind: JobKind, message?: string, chrome?: boolean) => Promise<void>;
   cancel: (id: string) => Promise<void>;
   latest: (prKey: string, kind: JobKind) => JobInfo | undefined;
@@ -20,6 +19,10 @@ interface JobsCtx {
 
 const Ctx = createContext<JobsCtx>(null!);
 export const useJobs = () => useContext(Ctx);
+/** Log lines live in their own context: they change several times a second during a run,
+ *  and only the log views need them. Everything else re-rendering with them made the app crawl. */
+const LinesCtx = createContext<Record<string, string[]>>({});
+export const useJobLines = () => useContext(LinesCtx);
 
 export function JobsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
@@ -83,7 +86,6 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<JobsCtx>(
     () => ({
       jobs,
-      lines,
       finishedTick,
       history,
       settings,
@@ -101,10 +103,14 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       latest: (prKey, kind) =>
         [...jobs].reverse().find((j) => j.prKey === prKey && j.kind === kind),
     }),
-    [jobs, lines, finishedTick, error, history, settings],
+    [jobs, finishedTick, error, history, settings],
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <LinesCtx.Provider value={lines}>{children}</LinesCtx.Provider>
+    </Ctx.Provider>
+  );
 }
 
 // ---------- stream-json → readable log ----------

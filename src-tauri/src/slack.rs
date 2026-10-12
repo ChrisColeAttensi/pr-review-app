@@ -16,15 +16,6 @@ use std::sync::{Mutex, OnceLock};
 struct Tools {
     search: String,
     send: String,
-    /// Older caches lack it; derived from `send`.
-    #[serde(default)]
-    draft: String,
-}
-
-impl Tools {
-    fn draft(&self) -> String {
-        if self.draft.is_empty() { format!("{}_draft", self.send) } else { self.draft.clone() }
-    }
 }
 
 static TOOLS: Mutex<Option<Tools>> = Mutex::new(None);
@@ -92,7 +83,6 @@ fn tools_for(server: &str) -> Tools {
     Tools {
         search: format!("mcp__{n}__slack_search_users"),
         send: format!("mcp__{n}__slack_send_message"),
-        draft: format!("mcp__{n}__slack_send_message_draft"),
     }
 }
 
@@ -179,7 +169,6 @@ fn run(settings: &Settings, prompt: &str, allowed: &str, schema: Value) -> Resul
                 let t = Tools {
                     search: format!("mcp__{server}__slack_search_users"),
                     send: format!("mcp__{server}__slack_send_message"),
-                    draft: format!("mcp__{server}__slack_send_message_draft"),
                 };
                 remember_tools(&t);
                 prompt = prompt.replace(&allowed, real);
@@ -316,26 +305,7 @@ Return found=true only for an exact email match, or a single unambiguous full-na
     Ok(Lookup { user, cached: false, emails })
 }
 
-/// What `send` did: posted it, or left it as a draft for the user to send.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sent {
-    pub drafted: bool,
-    /// The message, or (for a draft) a `slack://` link that opens the DM with the draft in it.
-    pub link: String,
-}
-
-/// `https://app.slack.com/client/T123/D456` → `slack://channel?team=T123&id=D456`, which opens
-/// the desktop app on that conversation. Anything else is returned as is.
-fn desktop_link(web: &str) -> String {
-    let parts: Vec<&str> = web.trim_end_matches('/').rsplit('/').take(2).collect();
-    match parts.as_slice() {
-        [chan, team] if team.starts_with('T') && web.contains("/client/") => format!("slack://channel?team={team}&id={chan}"),
-        _ => web.to_string(),
-    }
-}
-
-pub fn send(settings: &Settings, data: &Path, login: &str, user: &SlackUser, message: &str) -> Result<Sent, String> {
+pub fn send(settings: &Settings, data: &Path, login: &str, user: &SlackUser, message: &str) -> Result<String, String> {
     if !valid_user_id(&user.user_id) {
         return Err(format!("not a Slack user id: {}", user.user_id));
     }
@@ -343,68 +313,47 @@ pub fn send(settings: &Settings, data: &Path, login: &str, user: &SlackUser, mes
         return Err("empty message".into());
     }
     let t = tools(settings)?;
-    let drafted = settings.slack_delivery != "send";
-    let (tool, what, link) = if drafted {
-        (t.draft(), "Create exactly one Slack draft (do not send it)", "the channel_link it returns")
-    } else {
-        (t.send.clone(), "Send exactly one Slack direct message", "the message link")
-    };
     let prompt = format!(
-"{what}, then stop.
+"Send exactly one Slack direct message, then stop.
 Call `{tool}` once with channel_id=\"{id}\" and message set to the text between the markers, verbatim: do not add, remove, fix or reformat anything.
-Return sent=true and {link} as link if the call succeeded. If it fails, return sent=false and the error code or message as error.
+Return sent=true and the message link if the call succeeded.
 <<<MESSAGE
 {message}
 MESSAGE>>>",
+        tool = t.send,
         id = user.user_id,
     );
-    let schema = json!({
-        "type": "object",
-        "required": ["sent"],
-        "properties": { "sent": { "type": "boolean" }, "link": { "type": "string" }, "error": { "type": "string" } }
-    });
-    let v = run(settings, &prompt, &tool, schema).inspect_err(|_| forget_tools())?;
-    if v.get("sent").and_then(|b| b.as_bool()) != Some(true) {
-        let e = v.get("error").and_then(|e| e.as_str()).unwrap_or("Slack did not confirm the message");
-        return Err(if e.contains("draft_already_exists") {
-            "there's already a draft in your DM with them. Send or delete it in Slack, then retry.".into()
-        } else {
-            e.to_string()
-        });
-    }
-    // The user confirmed this person by sending: keep the match.
-    save_user(data, login, user);
-    let link = v.get("link").and_then(|l| l.as_str()).unwrap_or_default();
-    Ok(Sent { drafted, link: if drafted { desktop_link(link) } else { link.to_string() } })
-}
-
-/// Checks the whole path (CLI login, connector, tool names, delivery) with a DM to yourself.
-/// In draft mode it leaves a draft there, so you can see how a sent draft looks.
-pub fn send_test(settings: &Settings) -> Result<Sent, String> {
-    let t = tools(settings)?;
-    let drafted = settings.slack_delivery != "send";
-    let (tool, what, link) = if drafted {
-        (t.draft(), "Create exactly one Slack draft (do not send it)", "the channel_link it returns")
-    } else {
-        (t.send.clone(), "Send exactly one Slack direct message", "the message link")
-    };
-    let prompt = format!(
-"{what} in the logged-in user's DM with themself, then stop. Their own user id is written in the description of the \
-slack_send_message tool; read it from there (don't call that tool unless it is `{tool}`).
-Call `{tool}` once with that user id as channel_id and message \"✅ PR Review can message Slack as you.\"
-Return sent=true and {link} as link if the call succeeded, else sent=false and the error.",
-    );
-    let schema = json!({
-        "type": "object",
-        "required": ["sent"],
-        "properties": { "sent": { "type": "boolean" }, "link": { "type": "string" }, "error": { "type": "string" } }
-    });
-    let v = run(settings, &prompt, &tool, schema).inspect_err(|_| forget_tools())?;
+    let v = run(settings, &prompt, &t.send, sent_schema()).inspect_err(|_| forget_tools())?;
     if v.get("sent").and_then(|b| b.as_bool()) != Some(true) {
         return Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("Slack did not confirm the message").to_string());
     }
-    let link = v.get("link").and_then(|l| l.as_str()).unwrap_or_default();
-    Ok(Sent { drafted, link: if drafted { desktop_link(link) } else { link.to_string() } })
+    // The user confirmed this person by sending: keep the match.
+    save_user(data, login, user);
+    Ok(v.get("link").and_then(|l| l.as_str()).unwrap_or_default().to_string())
+}
+
+fn sent_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["sent"],
+        "properties": { "sent": { "type": "boolean" }, "link": { "type": "string" }, "error": { "type": "string" } }
+    })
+}
+
+/// Checks the whole path (CLI login, connector, tool names, sending) by DMing yourself.
+pub fn send_test(settings: &Settings) -> Result<String, String> {
+    let t = tools(settings)?;
+    let prompt = format!(
+"Send exactly one Slack direct message to the logged-in user themself (their own user id is given in the tool's description), then stop.
+Call `{tool}` once with that user id as channel_id and message \"✅ PR Review can send Slack messages as you.\"
+Return sent=true and the message link if the call succeeded.",
+        tool = t.send,
+    );
+    let v = run(settings, &prompt, &t.send, sent_schema()).inspect_err(|_| forget_tools())?;
+    if v.get("sent").and_then(|b| b.as_bool()) != Some(true) {
+        return Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("Slack did not confirm the message").to_string());
+    }
+    Ok(v.get("link").and_then(|l| l.as_str()).unwrap_or_default().to_string())
 }
 
 pub fn forget(data: &Path, login: &str) {
@@ -427,8 +376,6 @@ mod tests {
         let t = tools_for("claude.ai Slack");
         assert_eq!(t.send, "mcp__claude_ai_Slack__slack_send_message");
         assert_eq!(tools_for("plugin:engineering:slack").search, "mcp__plugin_engineering_slack__slack_search_users");
-        assert_eq!(t.draft(), "mcp__claude_ai_Slack__slack_send_message_draft");
-        assert_eq!(desktop_link("https://app.slack.com/client/T0123/D0456"), "slack://channel?team=T0123&id=D0456");
         assert!(valid_user_id("U01045HJK8X"));
         assert!(!valid_user_id("C123"));
         assert!(!valid_user_id("u01045hjk8x"));

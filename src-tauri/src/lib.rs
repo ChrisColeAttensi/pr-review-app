@@ -272,10 +272,20 @@ fn get_settings(state: tauri::State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(state: tauri::State<AppState>, settings: Settings) -> Result<(), String> {
+fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: Settings) -> Result<(), String> {
     settings::save(&settings_path(&state.data_dir), &settings)?;
-    *state.settings.lock().unwrap() = settings;
-    let _ = state.wake.lock().unwrap().send(());
+    let old = std::mem::replace(&mut *state.settings.lock().unwrap(), settings.clone());
+    // Only a change to what is fetched needs GitHub again. Filters and toggles (needs
+    // action, drafts, team, Chrome…) just redraw the menu.
+    let refetch = old.categories != settings.categories
+        || old.watched_repos != settings.watched_repos
+        || old.poll_interval_secs != settings.poll_interval_secs
+        || old.approved_grace_minutes != settings.approved_grace_minutes;
+    if refetch {
+        let _ = state.wake.lock().unwrap().send(());
+    } else {
+        tray::refresh(&app);
+    }
     Ok(())
 }
 
@@ -386,9 +396,25 @@ async fn merge_pr(app: AppHandle, request: github::MergeRequest) -> Result<Strin
 async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let out = github::submit_review(&request)?;
+        let state = app.state::<AppState>();
+        let key = format!("{}#{}", request.repo, request.number);
         if request.event == "approve" {
-            grace::record(&app.state::<AppState>().data_dir, &format!("{}#{}", request.repo, request.number));
+            grace::record(&state.data_dir, &key);
         }
+        // Show it now: the refetch below can take seconds, and GitHub's search lags behind.
+        let snap = {
+            let mut snap = state.snapshot.lock().unwrap();
+            let me = snap.me.clone();
+            if let Some(p) = snap.prs.iter_mut().find(|p| p.key == key) {
+                let st = match request.event.as_str() { "approve" => "APPROVED", "request_changes" => "CHANGES_REQUESTED", _ => "COMMENTED" };
+                p.latest_reviews.retain(|r| r.author != me);
+                p.latest_reviews.push(github::LatestReview { author: me.clone(), avatar: String::new(), state: st.into() });
+                p.just_approved = request.event == "approve";
+            }
+            snap.clone()
+        };
+        let _ = app.emit("prs-updated", snap);
+        tray::refresh(&app);
         let _ = app.state::<AppState>().wake.lock().unwrap().send(());
         Ok(out)
     })
@@ -408,7 +434,7 @@ async fn slack_lookup(app: AppHandle, repo: String, number: u64, login: String, 
 }
 
 #[tauri::command]
-async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, message: String) -> Result<slack::Sent, String> {
+async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, message: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap().clone();
@@ -419,7 +445,7 @@ async fn slack_send(app: AppHandle, login: String, user: slack::SlackUser, messa
 }
 
 #[tauri::command]
-async fn slack_test(app: AppHandle) -> Result<slack::Sent, String> {
+async fn slack_test(app: AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let s = app.state::<AppState>().settings.lock().unwrap().clone();
         slack::send_test(&s)

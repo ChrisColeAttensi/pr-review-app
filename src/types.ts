@@ -78,7 +78,6 @@ export interface Settings {
   slackOnMerge: boolean;
   slackApproveTemplate: string;
   slackMergeTemplate: string;
-  slackDelivery: "draft" | "send";
 }
 
 export type AnnotationKind = "explain" | "why" | "concern" | "question" | "suggestion" | "nit";

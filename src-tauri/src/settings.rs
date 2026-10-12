@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Categories {
     /// Someone asked me (or my team) to review.
@@ -57,9 +57,6 @@ pub struct Settings {
     /// {first}, {name}, {title}, {url}, {repo}, {number} are filled in.
     pub slack_approve_template: String,
     pub slack_merge_template: String,
-    /// "draft": leave the message as a Slack draft and open it, so I press Send (Slack then
-    /// shows no "Sent using Claude" tag). "send": the connector sends it for me.
-    pub slack_delivery: String,
     /// Remove review worktrees unused for this many days (0 = only when the PR closes).
     pub worktree_retention_days: u64,
     /// Keep a PR I approved under "Review requested" this long, so I can merge it (0 = drop at once).
@@ -92,7 +89,6 @@ impl Default for Settings {
             slack_on_merge: true,
             slack_approve_template: APPROVE_TEMPLATE.into(),
             slack_merge_template: MERGE_TEMPLATE.into(),
-            slack_delivery: "draft".into(),
         }
     }
 }

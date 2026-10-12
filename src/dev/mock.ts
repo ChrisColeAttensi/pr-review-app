@@ -25,7 +25,7 @@ export function installMock() {
     reviewModel: "", insightsModel: "", autoInsights: false, allowChromeVerify: true, worktreeRetentionDays: 7, approvedGraceMinutes: 60,
     slackOnApprove: true, slackOnMerge: true,
     slackApproveTemplate: "I've approved your PR [{repo}#{number}: {title}]({url}) 👍",
-    slackMergeTemplate: "I've merged your PR [{repo}#{number}: {title}]({url}) 🚀", slackDelivery: "draft",
+    slackMergeTemplate: "I've merged your PR [{repo}#{number}: {title}]({url}) 🚀",
   };
 
   mockIPC(
@@ -56,7 +56,7 @@ export function installMock() {
         };
         case "slack_lookup": await new Promise((r) => setTimeout(r, 1200));
           return { user: { userId: "U01045HJK8X", name: "Johan Helsing", title: "Staff Unity Software Engineer", email: "johan.helsing@attensi.com" }, cached: false, emails: [] };
-        case "slack_send": await new Promise((r) => setTimeout(r, 1000)); return { drafted: true, link: "slack://channel?team=T0&id=D0" };
+        case "slack_send": await new Promise((r) => setTimeout(r, 1000)); return "https://attensi.slack.com/archives/D0/p1";
         case "slack_forget": return null;
         case "pr_chat": return chat;
         case "pr_index": return {
@@ -68,7 +68,7 @@ export function installMock() {
           const p = snapshot.prs.find((x: any) => x.key === args.key); if (p) p.ignored = args.ignored;
           setTimeout(() => emit("prs-updated", { ...snapshot }), 10); return null;
         }
-        case "slack_test": return { drafted: true, link: "" };
+        case "slack_test": return "";
         case "test_notification": return null;
         case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
         case "merge_pr": {

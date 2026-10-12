@@ -188,7 +188,9 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
                     </div>
                     <div className="pr-item-side">
                       {runningFor(p.key) && <span className="spinner" title="Claude is working on this" />}
-                      {p.ci && <span className={`ci-dot ci-${p.ci.toLowerCase()}`} title={`CI ${p.ci.toLowerCase()}`} />}
+                      {p.ci && (p.ci === "PENDING" || p.ci === "EXPECTED"
+                        ? <span className="ci-running" title="CI running"><span className="ci-dot ci-pending" />CI</span>
+                        : <span className={`ci-dot ci-${p.ci.toLowerCase()}`} title={`CI ${p.ci.toLowerCase()}`} />)}
                       <span className="sz">
                         <span className="add">+{p.additions}</span> <span className="del">−{p.deletions}</span>
                       </span>

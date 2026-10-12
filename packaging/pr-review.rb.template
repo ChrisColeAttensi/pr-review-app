@@ -14,7 +14,7 @@ cask "pr-review" do
         "Authorization: Bearer #{token}",
       ]
   name "PR Review"
-  desc "Menu-bar PR monitor with a Claude-powered review UI"
+  desc "Claude-powered GitHub pull request review app"
   homepage "https://github.com/ChrisColeAttensi/homebrew-tap"
 
   depends_on arch: :arm64

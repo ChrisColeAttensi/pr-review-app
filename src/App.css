@@ -522,3 +522,7 @@ button.reviewed-ok { color: var(--add); border-color: color-mix(in srgb, var(--a
 /* Copy sits in its own strip under the reply, never over the text. */
 .bubble-assistant { padding-bottom: 24px; }
 .bubble .copy { top: auto; bottom: 4px; right: 10px; }
+
+/* PR Bar's settings: the dialog fills its own window instead of floating over the app. */
+.settings-window { height: 100vh; display: flex; background: var(--bg); }
+.settings-window .modal { width: 100%; max-height: none; border-radius: 0; border: none; box-shadow: none; }

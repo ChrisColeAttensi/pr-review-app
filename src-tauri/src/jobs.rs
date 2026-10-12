@@ -12,7 +12,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
@@ -61,9 +61,7 @@ pub fn claude_command(claude: &str) -> Command {
     cmd
 }
 
-pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+pub use pr_core::now_ms;
 
 const HEADLESS_NOTE: &str = "You are running headless inside the PR Review desktop app. \
 Nobody is watching the terminal and nobody can answer questions. \
@@ -206,7 +204,6 @@ fn finish(app: &AppHandle, jobs: &Jobs, id: &str, status: &str, error: Option<St
         })
     });
     let _ = app.emit("job-done", json!({ "jobId": id, "status": status, "error": error, "job": info }));
-    crate::tray::refresh(app);
 }
 
 pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: Option<String>, chrome: bool) -> Result<JobInfo, String> {
@@ -236,7 +233,6 @@ pub fn start(app: AppHandle, repo: String, number: u64, kind: String, message: O
         Job { info: info.clone(), pid: None, lines: vec![] },
     );
     let _ = app.emit("job-started", &info);
-    crate::tray::refresh(&app);
 
     let settings: Settings = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let data_dir = state.data_dir.clone();

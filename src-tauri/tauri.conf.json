@@ -42,5 +42,14 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool"
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "prreview"
+        ]
+      }
+    }
   }
 }

@@ -12,7 +12,13 @@ const CATS: { id: keyof Categories; label: string; hint: string }[] = [
 
 const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+/**
+ * One settings file, two apps: PR Bar (menu bar, polling, notifications) shows what it uses,
+ * and so does PR Review (the desktop app). In PR Bar this fills its own window.
+ */
+export function SettingsDialog({ onClose, app = "desktop" }: { onClose: () => void; app?: "desktop" | "bar" }) {
+  const bar = app === "bar";
+  const [barStatus, setBarStatus] = useState<{ alive: boolean; installed: boolean }>();
   const [s, setS] = useState<Settings>();
   const [found, setFound] = useState<Record<string, string>>();
   const [overrideRepo, setOverrideRepo] = useState("");
@@ -29,8 +35,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api.settings().then(setS);
     api.discoverRepos().then(setFound);
-    api.worktreeUsage().then(setUsage).catch(() => {});
-    api.getAutostart().then(setAutostart).catch(() => setAutostart(false));
+    if (bar) api.getAutostart().then(setAutostart).catch(() => setAutostart(false));
+    else {
+      api.worktreeUsage().then(setUsage).catch(() => {});
+      api.barStatus().then(setBarStatus).catch(() => {});
+    }
   }, []);
   if (!s) return null;
   const set = (patch: Partial<Settings>) => setS({ ...s, ...patch });
@@ -62,17 +71,29 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-back" onClick={onClose}>
+    <div className={bar ? "settings-window" : "modal-back"} onClick={bar ? undefined : onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="row">
-          <h2>Settings</h2>
+        <header className="row" data-tauri-drag-region>
+          <h2>{bar ? "PR Bar Settings" : "Settings"}</h2>
           <span className="spacer" />
           <button onClick={onClose}>Cancel</button>
           <button className="primary" onClick={save} disabled={saving}>Save</button>
         </header>
         {err && <div className="banner error">{err}</div>}
         <div className="modal-body">
-          <section>
+          {!bar && (
+            <section>
+              <h3>Menu bar</h3>
+              <p className="muted small">
+                {barStatus?.alive
+                  ? "PR Bar is running: it keeps the PR list fresh, shows it in the menu bar, and sends notifications. Its own settings (launch at login, notifications) are in its menu → Settings…"
+                  : barStatus?.installed
+                    ? "PR Bar is installed but not running. Open it for the menu bar and notifications; until then this app checks GitHub itself, without notifications."
+                    : <>The menu bar and notifications live in <b>PR Bar</b> now. Install it with <code>brew install --cask chriscoleattensi/tap/pr-bar</code>. Until then this app checks GitHub itself, without notifications.</>}
+              </p>
+            </section>
+          )}
+          {bar && <section>
             <h3>General</h3>
             <label className="check">
               <input
@@ -85,25 +106,26 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               />
               Launch at login <span className="muted small">starts quietly in the {TRAY}; applies immediately</span>
             </label>
-          </section>
+          </section>}
 
           <section>
             <h3>Monitoring</h3>
             <table className="cat-table">
               <thead>
-                <tr><th /><th>Show</th><th>Notify</th></tr>
+                <tr><th /><th>Show</th>{bar && <th>Notify</th>}</tr>
               </thead>
               <tbody>
                 {CATS.map((c) => (
                   <tr key={c.id}>
                     <td><div>{c.label}</div><div className="muted small">{c.hint}</div></td>
                     <td><input type="checkbox" checked={s.categories[c.id]} onChange={(e) => set({ categories: { ...s.categories, [c.id]: e.target.checked } })} /></td>
-                    <td><input type="checkbox" disabled={!s.categories[c.id] || !s.notifications} checked={s.notifyCategories[c.id]}
-                      onChange={(e) => set({ notifyCategories: { ...s.notifyCategories, [c.id]: e.target.checked } })} /></td>
+                    {bar && <td><input type="checkbox" disabled={!s.categories[c.id] || !s.notifications} checked={s.notifyCategories[c.id]}
+                      onChange={(e) => set({ notifyCategories: { ...s.notifyCategories, [c.id]: e.target.checked } })} /></td>}
                   </tr>
                 ))}
               </tbody>
             </table>
+            {bar && <>
             <div className="row">
               <label className="check"><input type="checkbox" checked={s.notifications} onChange={(e) => set({ notifications: e.target.checked })} /> Desktop notifications</label>
               <span className="spacer" />
@@ -112,6 +134,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 : "Arrives in 5 seconds. If no banner appears, check that notifications for PR Review are on in Settings → System → Notifications, and that Do Not Disturb is off."); }}>Send test notification</button>
             </div>
             {notifyMsg && <p className="muted small">{notifyMsg}</p>}
+            </>}
+            {bar && <>
+              <label className="check"><input type="checkbox" checked={s.actionableOnly} onChange={(e) => set({ actionableOnly: e.target.checked })} /> Needs action only</label>
+              <label className="check"><input type="checkbox" checked={s.showDrafts} onChange={(e) => set({ showDrafts: e.target.checked })} /> Show drafts</label>
+            </>}
             <label className="check"><input type="checkbox" checked={s.directRequestsOnly} onChange={(e) => set({ directRequestsOnly: e.target.checked })} /> Hide review requests that only come via a team (also in the sidebar as “Team requests”)</label>
             <label className="field">
               <span title="After you approve a PR, or once a PR is merged or closed">Keep approved and merged PRs listed for</span>
@@ -134,7 +161,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           <section>
             <h3>Repositories</h3>
-            <p className="muted small">Reviews run in a throwaway git worktree of your local clone, at the PR head. Clones are found by scanning these folders two levels deep.</p>
+            <p className="muted small">
+              {bar
+                ? "Where your local clones are, for PR Review. Clones are found by scanning these folders two levels deep."
+                : "Reviews run in a throwaway git worktree of your local clone, at the PR head. Clones are found by scanning these folders two levels deep."}
+            </p>
             <label className="field col">
               <span>Folders to scan <span className="muted small">one per line</span></span>
               <textarea rows={2} defaultValue={s.repoRoots.join("\n")} onChange={(e) => set({ repoRoots: lines(e.target.value) })} />
@@ -162,6 +193,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
+          {!bar && <>
           <section>
             <h3>Review worktrees</h3>
             <p className="muted small">
@@ -212,6 +244,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
+          </>}
+          {bar ? (
+          <section>
+            <h3>Claude</h3>
+            <label className="field">
+              <span>Review command</span>
+              <input value={s.reviewCommand} onChange={(e) => set({ reviewCommand: e.target.value })} />
+            </label>
+            <p className="muted small">“Copy review command” in a PR's menu copies this, ready to paste into Claude Desktop or a terminal. <code>{"{url}"}</code>, <code>{"{number}"}</code> and <code>{"{repo}"}</code> are filled in.</p>
+          </section>
+          ) : (
           <section>
             <h3>Claude</h3>
             <label className="field">
@@ -243,6 +286,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <label className="check"><input type="checkbox" checked={s.allowChromeVerify} onChange={(e) => set({ allowChromeVerify: e.target.checked })} /> Allow pr-review to verify in Chrome when needed: it decides per PR, and only opens Chrome for changes the diff and CI can't settle (needs the Claude in Chrome extension)</label>
             <label className="check"><input type="checkbox" checked={s.autoInsights} onChange={(e) => set({ autoInsights: e.target.checked })} /> Explain new review requests automatically, so the walkthrough is ready when you open them</label>
           </section>
+          )}
         </div>
       </div>
     </div>

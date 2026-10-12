@@ -31,23 +31,40 @@ fn save(data: &Path, m: &HashMap<String, Ignored>) {
 }
 
 /// Flag ignored PRs in a fresh fetch, and forget ignores for PRs long gone.
+/// The file is only rewritten when that changes something worth keeping: both apps watch it.
 pub fn apply(data: &Path, prs: &mut [Pr]) {
     let _g = LOCK.lock().unwrap();
-    let now = crate::jobs::now_ms();
+    let now = crate::now_ms();
     let mut m = load(data);
+    let mut dirty = false;
     for p in prs.iter_mut() {
         if let Some(e) = m.get_mut(&p.key) {
             p.ignored = true;
-            e.last_seen = now;
+            // A day's precision is plenty for a two-week expiry.
+            if now.saturating_sub(e.last_seen) > 86_400_000 {
+                e.last_seen = now;
+                dirty = true;
+            }
         }
     }
+    let before = m.len();
     m.retain(|_, e| now.saturating_sub(e.last_seen) < FORGET_AFTER_MS);
-    save(data, &m);
+    if dirty || m.len() != before {
+        save(data, &m);
+    }
+}
+
+/// Flag ignored PRs without touching the file (after another app changed it).
+pub fn flag(data: &Path, prs: &mut [Pr]) {
+    let m = load(data);
+    for p in prs.iter_mut() {
+        p.ignored = m.contains_key(&p.key);
+    }
 }
 
 pub fn set(data: &Path, key: &str, title: &str, ignored: bool) {
     let _g = LOCK.lock().unwrap();
-    let now = crate::jobs::now_ms();
+    let now = crate::now_ms();
     let mut m = load(data);
     if ignored {
         m.insert(key.to_string(), Ignored { title: title.to_string(), ignored_at: now, last_seen: now });

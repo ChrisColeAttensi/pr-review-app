@@ -32,10 +32,11 @@ const APPROVAL_LABEL: Record<Approval, string> = {
 
 /** Compact label for a pr-review verdict heading like "✅ Approve — reason". */
 function verdictChip(v: string): { text: string; tone: string } {
-  if (/approve/i.test(v)) return { text: "✓ Reviewed", tone: "ok" };
+  // ✓ is kept for approvals (GitHub's mark); a clean pr-review run is a 🔎.
+  if (/approve/i.test(v)) return { text: "🔎 No blockers", tone: "ok" };
   if (/change before merge|changes/i.test(v)) return { text: "🛠 Changes", tone: "bad" };
   if (/decision/i.test(v)) return { text: "🤔 Decide", tone: "warn" };
-  return { text: "✓ Reviewed", tone: "ok" };
+  return { text: "🔎 Reviewed", tone: "ok" };
 }
 
 function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
@@ -45,7 +46,7 @@ function Flags({ p, e }: { p: Pr; e?: IndexEntry }) {
   if (!chip && !e.insightsHead && !e.drafts && !e.chat && !p.teamOnly && !p.justApproved) return null;
   return (
     <div className="pr-flags">
-      {p.justApproved && <span className="flag tone-ok" title="You approved this recently. It stays here for a while so you can merge it (Settings → Monitoring).">👍 approved</span>}
+      {p.justApproved && <span className="flag tone-ok" title="You approved this recently. It stays here for a while so you can merge it (Settings → Monitoring).">✓ Approved</span>}
       {chip && (
         <span className={`flag tone-${stale ? "muted" : chip.tone}`} title={`pr-review: ${e.verdict}${stale ? " (new commits since)" : ""}`}>
           {chip.text}{stale && " ↻"}
@@ -118,6 +119,14 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
     api.index().then(setIndex).catch(() => {});
   }, [finishedTick, snap.fetchedAt, selected]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // PR Bar owns the menu bar and notifications; say so when it isn't there to do it.
+  const [barAlive, setBarAlive] = useState(true);
+  useEffect(() => {
+    const check = () => api.barStatus().then((b) => setBarAlive(b.alive)).catch(() => {});
+    check();
+    const t = setInterval(check, 30_000);
+    return () => clearInterval(t);
+  }, []);
   const f = filter.toLowerCase();
   const match = (p: Pr) =>
     isVisible(p, view) && (!f || `${p.title} ${p.repo} ${p.author} #${p.number}`.toLowerCase().includes(f));
@@ -211,6 +220,7 @@ export function Sidebar({ snap, selected, onSelect, onSettings, onRefresh, filte
         {snap.me && <>@{snap.me} · </>}
         {snap.fetchedAt ? `updated ${timeAgo(snap.fetchedAt)}` : "loading…"}
         {hidden > 0 && <> · {hidden} hidden</>}
+        {!barAlive && <div title="Open or install PR Bar for the menu bar and notifications (see Settings)">No notifications: PR Bar isn't running</div>}
       </div>
     </aside>
   );

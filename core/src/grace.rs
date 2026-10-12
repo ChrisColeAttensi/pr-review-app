@@ -18,14 +18,14 @@ fn load(data: &Path) -> HashMap<String, u64> {
 pub fn record(data: &Path, key: &str) {
     let _g = LOCK.lock().unwrap();
     let mut m = load(data);
-    m.insert(key.to_string(), crate::jobs::now_ms());
+    m.insert(key.to_string(), crate::now_ms());
     let _ = std::fs::write(path(data), serde_json::to_string_pretty(&m).unwrap_or_default());
 }
 
 /// Keys still inside the grace window, pruning the rest.
 pub fn active(data: &Path, minutes: u64) -> Vec<String> {
     let _g = LOCK.lock().unwrap();
-    let now = crate::jobs::now_ms();
+    let now = crate::now_ms();
     let window = minutes * 60_000;
     let mut m = load(data);
     let before = m.len();

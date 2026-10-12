@@ -95,3 +95,23 @@ pub fn which(name: &str) -> Option<String> {
     found.filter(|s| !s.is_empty())
 }
 
+
+/// Is this app installed? `mac_name` as `open -a` knows it; on Windows, by its URL scheme.
+pub fn app_installed(mac_name: &str, scheme: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = scheme;
+        Command::new("open").args(["-Ra", mac_name]).output().map(|o| o.status.success()).unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        let _ = mac_name;
+        command("reg").args(["query", &format!(r"HKCU\Software\Classes\{scheme}")]).output().map(|o| o.status.success()).unwrap_or(false)
+            || command("reg").args(["query", &format!(r"HKCR\{scheme}")]).output().map(|o| o.status.success()).unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (mac_name, scheme);
+        false
+    }
+}

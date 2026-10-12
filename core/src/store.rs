@@ -123,7 +123,7 @@ pub fn clear_thread(data: &Path, repo: &str, number: u64) -> Result<(), String> 
         let _ = std::fs::remove_file(dir.join(f));
     }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("thread-cleared-at"), crate::jobs::now_ms().to_string()).map_err(|e| e.to_string())
+    std::fs::write(dir.join("thread-cleared-at"), crate::now_ms().to_string()).map_err(|e| e.to_string())
 }
 
 pub fn resumable(data: &Path, repo: &str, number: u64) -> Option<(String, String)> {

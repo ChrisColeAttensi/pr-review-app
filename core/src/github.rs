@@ -12,7 +12,7 @@ query($q: String!) {
       ... on PullRequest {
         number title url isDraft createdAt updatedAt
         additions deletions changedFiles
-        headRefOid headRefName baseRefName reviewDecision
+        headRefOid headRefName baseRefName reviewDecision mergeStateStatus
         author { login avatarUrl }
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -81,6 +81,9 @@ pub struct Pr {
     pub head_ref: String,
     pub base_ref: String,
     pub review_decision: Option<String>,
+    /// GitHub's mergeability: CLEAN, BLOCKED, BEHIND, DIRTY (conflicts), UNSTABLE, UNKNOWN…
+    #[serde(default)]
+    pub merge_state: Option<String>,
     pub ci: Option<String>,
     pub reviews: Vec<Review>,
     pub requested_reviewers: Vec<RequestedReviewer>,
@@ -130,11 +133,23 @@ pub fn ci_failed(p: &Pr) -> bool {
     matches!(p.ci.as_deref(), Some("FAILURE") | Some("ERROR"))
 }
 
+/// Approved, checks green, and GitHub would merge it now (no conflicts, not behind or blocked).
+/// UNKNOWN (GitHub hasn't computed it yet) counts as mergeable when the rest is fine.
+pub fn ready_to_merge(p: &Pr) -> bool {
+    approval(p) == "APPROVED"
+        && matches!(p.ci.as_deref(), None | Some("SUCCESS"))
+        && !matches!(p.merge_state.as_deref(), Some("DIRTY" | "BLOCKED" | "BEHIND" | "DRAFT"))
+}
+
+pub fn has_conflicts(p: &Pr) -> bool {
+    p.merge_state.as_deref() == Some("DIRTY")
+}
+
 fn needs_action(p: &Pr) -> bool {
     let has = |c: &str| p.categories.iter().any(|x| x == c);
     has("reviewRequested")
         || has("reReview")
-        || (has("mine") && (approval(p) != "REVIEW_REQUIRED" || ci_failed(p)))
+        || (has("mine") && (approval(p) != "REVIEW_REQUIRED" || ci_failed(p) || has_conflicts(p)))
 }
 
 fn s(v: &Value, ptr: &str) -> String {
@@ -218,6 +233,7 @@ fn to_pr(n: &Value, me: &str) -> Option<Pr> {
         head_ref: s(n, "/headRefName"),
         base_ref: s(n, "/baseRefName"),
         review_decision: n.get("reviewDecision").and_then(|x| x.as_str()).map(String::from),
+        merge_state: n.get("mergeStateStatus").and_then(|x| x.as_str()).map(String::from),
         ci: n
             .pointer("/commits/nodes/0/commit/statusCheckRollup/state")
             .and_then(|x| x.as_str())

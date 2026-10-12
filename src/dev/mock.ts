@@ -70,6 +70,7 @@ export function installMock() {
         }
         case "slack_test": return "";
         case "test_notification": return null;
+        case "bar_status": return { alive: true, installed: true };
         case "submit_review": await new Promise((r) => setTimeout(r, 500)); return "";
         case "merge_pr": {
           await new Promise((r) => setTimeout(r, 600));

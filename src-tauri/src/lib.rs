@@ -1,17 +1,10 @@
-mod cleanup;
-mod github;
-mod grace;
-mod ignore;
 mod jobs;
-mod repos;
-mod settings;
-mod shell;
 mod slack;
-mod store;
-mod tray;
 
-use github::Pr;
-use serde::{Deserialize, Serialize};
+// The shared modules keep their old paths (`crate::store`, …) for the code that moved out.
+pub use pr_core::{cleanup, github, grace, ignore, repos, settings, shell, store};
+
+use pr_core::sync::{self, Snapshot};
 use serde_json::{json, Value};
 use settings::Settings;
 use std::collections::{HashMap, HashSet};
@@ -19,13 +12,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_notification::NotificationExt;
-
-const LAUNCHED_AT_LOGIN: &str = "--hidden";
+use tauri_plugin_deep_link::DeepLinkExt;
 
 pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
@@ -35,175 +24,84 @@ pub struct AppState {
     wake: Mutex<Sender<()>>,
 }
 
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Snapshot {
-    me: String,
-    prs: Vec<Pr>,
-    errors: Vec<String>,
-    fetched_at: u64,
-    loading: bool,
-}
-
-/// What we last told the user about each PR, so we only notify on change.
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Seen {
-    head: String,
-    ci: Option<String>,
-    reviews: usize,
-    categories: Vec<String>,
-    #[serde(default)]
-    draft: bool,
-}
-
 fn settings_path(data: &PathBuf) -> PathBuf {
     data.join("settings.json")
 }
 
-// ---------- polling & notifications ----------
+// ---------- PR list ----------
 
-fn notify(app: &AppHandle, title: &str, body: &str) {
-    let _ = app.notification().builder().title(title).body(body).show();
+/// Fetch now: through PR Bar when it is running (it owns polling), else ourselves.
+fn request_refresh(state: &AppState) {
+    if sync::bar_alive(&state.data_dir) {
+        sync::touch(&state.data_dir, sync::REFRESH);
+    }
+    let _ = state.wake.lock().unwrap().send(());
 }
 
-fn diff_and_notify(app: &AppHandle, s: &Settings, me: &str, prs: &[Pr], seen: &mut HashMap<String, Seen>, first_run: bool) {
-    let nc = &s.notify_categories;
-    let mut new_requests: Vec<&Pr> = vec![];
-    for pr in prs {
-        let has = |c: &str| pr.categories.iter().any(|x| x == c);
-        let reviews_by_others = pr.reviews.iter().filter(|r| r.author != me).count();
-        let prev = seen.get(&pr.key).cloned();
-        let now = Seen {
-            head: pr.head_sha.clone(),
-            ci: pr.ci.clone(),
-            reviews: reviews_by_others,
-            categories: pr.categories.clone(),
-            draft: pr.is_draft,
-        };
-        seen.insert(pr.key.clone(), now);
-        if pr.ignored || (pr.team_only && s.direct_requests_only) {
-            continue;
-        }
-        if first_run || !s.notifications || (pr.is_draft && !s.show_drafts) {
-            continue;
-        }
-        // A hidden draft that turns ready counts as new.
-        let was_hidden = prev.as_ref().is_some_and(|p| p.draft && !s.show_drafts);
-        let was = |c: &str| !was_hidden && prev.as_ref().map(|p| p.categories.iter().any(|x| x == c)).unwrap_or(false);
-        let label = format!("{}#{}", pr.repo, pr.number);
-
-        if has("reviewRequested") && !was("reviewRequested") {
-            new_requests.push(pr);
-            if nc.review_requested {
-                notify(app, &format!("Review requested · {label}"), &format!("{} — by {}", pr.title, pr.author));
-            }
-            continue;
-        }
-        if has("reReview") && nc.re_review {
-            if let Some(p) = &prev {
-                if p.head != pr.head_sha && !p.head.is_empty() {
-                    notify(app, &format!("New commits since your review · {label}"), &pr.title);
-                    continue;
-                }
-            }
-        }
-        if has("watched") && prev.is_none() && nc.watched && pr.author != me {
-            notify(app, &format!("New PR · {label}"), &format!("{} — by {}", pr.title, pr.author));
-            continue;
-        }
-        if has("mine") && nc.mine {
-            if let Some(p) = &prev {
-                if p.ci != pr.ci {
-                    match pr.ci.as_deref() {
-                        Some("SUCCESS") => notify(app, &format!("CI passed · {label}"), &pr.title),
-                        Some("FAILURE") | Some("ERROR") => notify(app, &format!("CI failed · {label}"), &pr.title),
-                        _ => {}
-                    }
-                }
-                if reviews_by_others > p.reviews {
-                    if let Some(r) = pr.reviews.iter().rev().find(|r| r.author != me) {
-                        let verb = match r.state.as_str() {
-                            "APPROVED" => "approved",
-                            "CHANGES_REQUESTED" => "requested changes on",
-                            _ => "commented on",
-                        };
-                        notify(app, &format!("{} {verb} your PR", r.author), &format!("{label} · {}", pr.title));
-                    }
-                }
-            }
-        }
-    }
-    if s.auto_insights {
-        for pr in new_requests {
-            let _ = jobs::start(app.clone(), pr.repo.clone(), pr.number, "insights".into(), None, false);
-        }
-    }
+fn publish(app: &AppHandle, snap: Snapshot) {
+    *app.state::<AppState>().snapshot.lock().unwrap() = snap.clone();
+    let _ = app.emit("prs-updated", snap);
 }
 
+/// While PR Bar runs, mirror its snapshot. Otherwise poll GitHub ourselves, without
+/// notifications (those are PR Bar's job), and share what we fetched.
 fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let seen_path = state.data_dir.join("seen.json");
-        let mut first_run = !seen_path.exists();
-        let mut seen: HashMap<String, Seen> = std::fs::read_to_string(&seen_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let data = state.data_dir.clone();
+        let mut poller = pr_core::poll::Poller::default();
+        let mut watch = sync::Watch::new(&data, &[sync::SNAPSHOT, sync::SETTINGS, sync::IGNORED]);
+        let mut last_fetch: Option<Instant> = None;
         let mut last_cleanup: Option<Instant> = None;
-        // PRs that left the open lists, by key: (last known PR with closed_state set, when).
-        let mut gone: HashMap<String, (github::Pr, u64)> = HashMap::new();
+        let mut known_requests: Option<HashSet<String>> = None;
+        let mut loaded_snapshot = false;
         loop {
+            let changed = watch.changed(&data);
+            if changed.iter().any(|c| c == sync::SETTINGS) {
+                *state.settings.lock().unwrap() = settings::load(&data.join(sync::SETTINGS));
+            }
             let s = state.settings.lock().unwrap().clone();
-            {
-                let mut snap = state.snapshot.lock().unwrap();
-                snap.loading = true;
-                let _ = app.emit("prs-updated", snap.clone());
-            }
-            let grace = if s.approved_grace_minutes > 0 { grace::active(&state.data_dir, s.approved_grace_minutes) } else { vec![] };
-            let mut res = github::fetch_all(&s, &grace);
-            ignore::apply(&state.data_dir, &mut res.prs);
-            if res.errors.is_empty() || !res.prs.is_empty() {
-                diff_and_notify(&app, &s, &res.me, &res.prs, &mut seen, first_run);
-                first_run = false;
-                let _ = std::fs::write(&seen_path, serde_json::to_string(&seen).unwrap_or_default());
-            }
-            // A PR that vanished was merged or closed (or I was un-requested). Ask which,
-            // and keep merged/closed ones on show for the grace period.
-            let window = s.approved_grace_minutes * 60_000;
-            let now = jobs::now_ms();
-            if res.errors.is_empty() && window > 0 {
-                let prev: Vec<github::Pr> = state.snapshot.lock().unwrap().prs.iter().filter(|p| p.closed_state.is_none()).cloned().collect();
-                for p in prev {
-                    if res.prs.iter().any(|x| x.key == p.key) || gone.contains_key(&p.key) {
-                        continue;
-                    }
-                    if let Some(st) = github::pr_state(&p.repo, p.number).filter(|st| st != "OPEN") {
-                        let mut p = p;
-                        p.closed_state = Some(st);
-                        p.needs_action = false;
-                        p.just_approved = false;
-                        gone.insert(p.key.clone(), (p, now));
+            let bar = sync::bar_alive(&data);
+            let due = last_fetch.is_none_or(|t| t.elapsed() >= Duration::from_secs(s.poll_interval_secs.max(30)));
+
+            let mut fresh: Option<Snapshot> = None;
+            if bar {
+                if !loaded_snapshot || changed.iter().any(|c| c == sync::SNAPSHOT) {
+                    fresh = sync::read_snapshot(&data);
+                }
+            } else if due {
+                let prev = state.snapshot.lock().unwrap().clone();
+                if prev.fetched_at == 0 {
+                    // First look: show what PR Bar (or our last run) saw while we fetch.
+                    if let Some(old) = sync::read_snapshot(&data) {
+                        publish(&app, Snapshot { loading: true, ..old });
                     }
                 }
+                let mut loading = state.snapshot.lock().unwrap().clone();
+                loading.loading = true;
+                let _ = app.emit("prs-updated", loading);
+                let base = sync::read_snapshot(&data).filter(|_| prev.fetched_at == 0).unwrap_or(prev);
+                let snap = poller.cycle(&data, &s, &base);
+                if snap.errors.is_empty() || !snap.prs.is_empty() {
+                    sync::write_snapshot(&data, &snap);
+                    watch.changed(&data);
+                }
+                last_fetch = Some(Instant::now());
+                fresh = Some(snap);
+            } else if changed.iter().any(|c| c == sync::IGNORED) {
+                let mut snap = state.snapshot.lock().unwrap().clone();
+                pr_core::poll::reapply_ignores(&data, &mut snap);
+                fresh = Some(snap);
             }
-            gone.retain(|k, (_, at)| now.saturating_sub(*at) < window && !res.prs.iter().any(|x| &x.key == k));
-            res.prs.extend(gone.values().map(|(p, _)| p.clone()));
-            let snap = {
-                let mut snap = state.snapshot.lock().unwrap();
-                *snap = Snapshot {
-                    me: if res.me.is_empty() { snap.me.clone() } else { res.me },
-                    prs: res.prs,
-                    errors: res.errors,
-                    fetched_at: jobs::now_ms(),
-                    loading: false,
-                };
-                snap.clone()
-            };
-            let _ = app.emit("prs-updated", snap.clone());
-            tray::refresh(&app);
 
-            if !snap.loading && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
+            if let Some(snap) = fresh {
+                loaded_snapshot = true;
+                auto_insights(&app, &s, &snap, &mut known_requests);
+                publish(&app, snap);
+            }
+
+            let snap = state.snapshot.lock().unwrap().clone();
+            if snap.fetched_at > 0 && snap.errors.is_empty() && last_cleanup.is_none_or(|t| t.elapsed() >= cleanup::INTERVAL) {
                 last_cleanup = Some(Instant::now());
                 let app2 = app.clone();
                 let open: HashSet<String> = snap.prs.iter().filter(|p| p.closed_state.is_none()).map(|p| p.key.clone()).collect();
@@ -214,15 +112,34 @@ fn spawn_poller(app: AppHandle, rx: std::sync::mpsc::Receiver<()>) {
                 });
             }
 
-            let wait = Duration::from_secs(s.poll_interval_secs.max(30));
-            match rx.recv_timeout(wait) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(()) => {
                     while rx.try_recv().is_ok() {}
+                    last_fetch = None;
                 }
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         }
     });
+}
+
+/// "Explain new review requests automatically": start Explain for requests we haven't seen.
+fn auto_insights(app: &AppHandle, s: &Settings, snap: &Snapshot, known: &mut Option<HashSet<String>>) {
+    let now: HashSet<String> = snap
+        .prs
+        .iter()
+        .filter(|p| p.closed_state.is_none() && !p.just_approved && p.categories.iter().any(|c| c == "reviewRequested"))
+        .map(|p| p.key.clone())
+        .collect();
+    if let Some(before) = known.as_ref() {
+        if s.auto_insights {
+            for p in snap.prs.iter().filter(|p| now.contains(&p.key) && !before.contains(&p.key) && !p.ignored) {
+                let _ = jobs::start(app.clone(), p.repo.clone(), p.number, "insights".into(), None, false);
+            }
+        }
+    }
+    *known = Some(now);
 }
 
 fn busy_keys(state: &AppState) -> HashSet<String> {
@@ -236,8 +153,6 @@ fn busy_keys(state: &AppState) -> HashSet<String> {
 // ---------- window ----------
 
 fn show_window(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -249,9 +164,17 @@ fn hide_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
-    // Drop out of the dock and app switcher; the menu-bar icon stays.
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
+/// `prreview://open?pr=owner/repo%23123`, from PR Bar.
+fn handle_link(app: &AppHandle, url: &str) {
+    show_window(app);
+    let Some(q) = url.split_once('?').map(|(_, q)| q) else { return };
+    for (k, v) in q.split('&').filter_map(|kv| kv.split_once('=')) {
+        if k == "pr" {
+            let _ = app.emit("open-pr", pr_core::url_decode(v));
+        }
+    }
 }
 
 // ---------- commands ----------
@@ -263,7 +186,7 @@ fn get_snapshot(state: tauri::State<AppState>) -> Snapshot {
 
 #[tauri::command]
 fn refresh(state: tauri::State<AppState>) {
-    let _ = state.wake.lock().unwrap().send(());
+    request_refresh(&state);
 }
 
 #[tauri::command]
@@ -272,19 +195,17 @@ fn get_settings(state: tauri::State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: Settings) -> Result<(), String> {
+fn save_settings(state: tauri::State<AppState>, settings: Settings) -> Result<(), String> {
     settings::save(&settings_path(&state.data_dir), &settings)?;
     let old = std::mem::replace(&mut *state.settings.lock().unwrap(), settings.clone());
     // Only a change to what is fetched needs GitHub again. Filters and toggles (needs
-    // action, drafts, team, Chrome…) just redraw the menu.
+    // action, drafts, team, Chrome…) just redraw the menu, which PR Bar picks up from the file.
     let refetch = old.categories != settings.categories
         || old.watched_repos != settings.watched_repos
         || old.poll_interval_secs != settings.poll_interval_secs
         || old.approved_grace_minutes != settings.approved_grace_minutes;
     if refetch {
-        let _ = state.wake.lock().unwrap().send(());
-    } else {
-        tray::refresh(&app);
+        request_refresh(&state);
     }
     Ok(())
 }
@@ -385,7 +306,7 @@ async fn merge_pr(app: AppHandle, request: github::MergeRequest) -> Result<Strin
         if !request.auto {
             cleanup::remove(&store::worktree_dir(&state.data_dir, &request.repo, request.number));
         }
-        let _ = state.wake.lock().unwrap().send(());
+        request_refresh(&state);
         Ok(out)
     })
     .await
@@ -414,8 +335,7 @@ async fn submit_review(app: AppHandle, request: github::ReviewRequest) -> Result
             snap.clone()
         };
         let _ = app.emit("prs-updated", snap);
-        tray::refresh(&app);
-        let _ = app.state::<AppState>().wake.lock().unwrap().send(());
+        request_refresh(&state);
         Ok(out)
     })
     .await
@@ -455,16 +375,6 @@ async fn slack_test(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn test_notification(app: AppHandle) {
-    // macOS only shows banners for apps in the background, and the user just clicked
-    // this inside the app: give them time to switch away.
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
-        notify(&app, "Review requested · Attensi/example#123", "This is a test notification from PR Review.");
-    });
-}
-
-#[tauri::command]
 fn slack_forget(state: tauri::State<AppState>, login: String) {
     slack::forget(&state.data_dir, &login);
 }
@@ -475,9 +385,8 @@ fn pr_chat(state: tauri::State<AppState>, repo: String, number: u64) -> Vec<stor
 }
 
 #[tauri::command]
-fn clear_thread(app: AppHandle, state: tauri::State<AppState>, repo: String, number: u64) -> Result<(), String> {
+fn clear_thread(state: tauri::State<AppState>, repo: String, number: u64) -> Result<(), String> {
     store::clear_thread(&state.data_dir, &repo, number)?;
-    tray::refresh(&app);
     Ok(())
 }
 
@@ -571,7 +480,6 @@ fn set_ignored(app: AppHandle, key: String, title: String, ignored: bool) {
         snap.clone()
     };
     let _ = app.emit("prs-updated", snap);
-    tray::refresh(&app);
 }
 
 #[tauri::command]
@@ -579,16 +487,10 @@ fn run_history(state: tauri::State<AppState>) -> Vec<Value> {
     store::history(&state.data_dir)
 }
 
+/// Whether PR Bar is running (it owns the menu bar and notifications), and installed.
 #[tauri::command]
-fn get_autostart(app: AppHandle) -> Result<bool, String> {
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
-    let al = app.autolaunch();
-    if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())?;
-    al.is_enabled().map_err(|e| e.to_string())
+fn bar_status(state: tauri::State<AppState>) -> Value {
+    json!({ "alive": sync::bar_alive(&state.data_dir), "installed": shell::app_installed("PR Bar", "prbar") })
 }
 
 #[tauri::command]
@@ -603,12 +505,13 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        // Login launches pass --hidden, so the app starts quietly in the menu bar.
-        .plugin(tauri_plugin_autostart::Builder::new().arg(LAUNCHED_AT_LOGIN).build())
+        .plugin(tauri_plugin_deep_link::init())
+        // Only to switch off the login item older versions set up: PR Bar starts at login now.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = pr_core::data_dir();
             std::fs::create_dir_all(&data_dir)?;
-            let s = settings::load(&settings_path(&data_dir));
+            let s = settings::load(&data_dir.join(sync::SETTINGS));
             slack::init(&data_dir);
             let (tx, rx) = channel();
             app.manage(AppState {
@@ -618,46 +521,28 @@ pub fn run() {
                 snapshot: Arc::new(Mutex::new(Snapshot { loading: true, ..Default::default() })),
                 wake: Mutex::new(tx),
             });
+            if app.autolaunch().is_enabled().unwrap_or(false) {
+                let _ = app.autolaunch().disable();
+            }
 
-            let open = MenuItem::with_id(app, "open", "Open PR Review", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit PR Review", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
-            TrayIconBuilder::with_id("main")
-                .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
-                .icon_as_template(true)
-                .menu(&menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| {
-                    let id = event.id().as_ref().to_string();
-                    match id.as_str() {
-                        "open" => show_window(app),
-                        "refresh" => {
-                            let _ = app.state::<AppState>().wake.lock().unwrap().send(());
-                        }
-                        "settings" => {
-                            show_window(app);
-                            let _ = app.emit("open-settings", ());
-                        }
-                        "quit" => app.exit(0),
-                        _ => {
-                            if let Some(key) = id.strip_prefix("pr:") {
-                                show_window(app);
-                                let _ = app.emit("open-pr", key.to_string());
-                            }
-                        }
-                    }
-                })
-                .build(app)?;
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    handle_link(&handle, url.as_str());
+                }
+            });
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                for url in urls {
+                    handle_link(app.handle(), url.as_str());
+                }
+            }
 
             spawn_poller(app.handle().clone(), rx);
-            if std::env::args().any(|a| a == LAUNCHED_AT_LOGIN) {
-                hide_window(app.handle());
-            } else {
-                show_window(app.handle());
-            }
+            show_window(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Closing the window keeps the app (and any Claude runs) going; the dock icon brings it back.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 hide_window(window.app_handle());
@@ -680,8 +565,7 @@ pub fn run() {
             job_lines,
             clean_worktree,
             hide_main,
-            get_autostart,
-            set_autostart,
+            bar_status,
             run_history,
             cleanup_worktrees,
             worktree_usage,
@@ -695,8 +579,7 @@ pub fn run() {
             set_ignored,
             pr_index,
             handoff,
-            slack_test,
-            test_notification
+            slack_test
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

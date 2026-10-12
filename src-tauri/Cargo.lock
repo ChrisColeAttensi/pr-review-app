@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "pr-review"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "dirs 7.0.0",
  "libc",

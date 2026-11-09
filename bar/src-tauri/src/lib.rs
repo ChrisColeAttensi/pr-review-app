@@ -1,16 +1,19 @@
 //! PR Bar: the menu bar half of PR Review. Polls GitHub, shows what needs you, and sends
 //! the notifications. PR Review (the desktop app) reads what it fetches; see `pr_core::sync`.
 
+mod avatar;
 mod tray;
 
 use pr_core::notify::Notifier;
 use pr_core::poll::{self, Poller};
 use pr_core::settings::{self, Settings};
 use pr_core::sync::{self, Snapshot};
-use pr_core::{ignore, repos, shell, url_encode};
+use pr_core::{repos, shell, url_encode};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::tray::TrayIconBuilder;
@@ -32,6 +35,15 @@ pub struct BarState {
     pub apps: Mutex<Apps>,
     /// What the menu last showed, to skip rebuilding an identical one.
     pub menu_sig: Mutex<String>,
+    /// Manual refreshes asked for / completed, so the menu bar spinner knows when to stop.
+    pub refresh_requested: AtomicU64,
+    pub refresh_done: AtomicU64,
+    /// The refresh animation is running (it owns the tray title meanwhile).
+    pub spinning: AtomicBool,
+    /// Round author avatars by login, loaded from the disk cache on first use.
+    pub avatars: Mutex<HashMap<String, Option<tauri::image::Image<'static>>>>,
+    /// Hover text for menu rows, by row title.
+    pub tooltips: Mutex<HashMap<String, String>>,
     wake: Mutex<Sender<()>>,
 }
 
@@ -43,7 +55,7 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
-fn wake(app: &AppHandle) {
+pub(crate) fn wake(app: &AppHandle) {
     let _ = app.state::<BarState>().wake.lock().unwrap().send(());
 }
 
@@ -66,6 +78,8 @@ fn spawn_poller(app: AppHandle, rx: Receiver<()>) {
         loop {
             let s = state.settings.lock().unwrap().clone();
             let prev = state.snapshot.lock().unwrap().clone();
+            // Any refresh asked for before this point is answered by this cycle.
+            let asked = state.refresh_requested.load(Ordering::SeqCst);
             let snap = poller.cycle(&data, &s, &prev);
             if snap.errors.is_empty() || !snap.prs.is_empty() {
                 for n in notifier.diff(&s, &snap.me, &snap.prs).0 {
@@ -73,8 +87,15 @@ fn spawn_poller(app: AppHandle, rx: Receiver<()>) {
                 }
                 sync::write_snapshot(&data, &snap);
             }
+            let fresh: Vec<_> = snap.prs.iter().filter(|p| !p.categories.iter().all(|c| c == "mine")).cloned().collect();
             *state.snapshot.lock().unwrap() = snap;
+            state.refresh_done.fetch_max(asked, Ordering::SeqCst);
             tray::refresh(&app);
+            // After the menu is up to date, so a slow avatar never delays the list.
+            if avatar::fetch_missing(&data, &fresh) {
+                state.avatars.lock().unwrap().retain(|_, v| v.is_some());
+                tray::refresh(&app);
+            }
 
             let _ = rx.recv_timeout(Duration::from_secs(s.poll_interval_secs.max(30)));
             while rx.try_recv().is_ok() {}
@@ -100,7 +121,7 @@ fn spawn_watcher(app: AppHandle) {
             let mut redraw = false;
             for c in &changed {
                 match c.as_str() {
-                    sync::REFRESH => wake(&app),
+                    sync::REFRESH => tray::start_refresh(&app),
                     sync::SETTINGS => {
                         let new = settings::load(&data.join(sync::SETTINGS));
                         let old = std::mem::replace(&mut *state.settings.lock().unwrap(), new.clone());
@@ -134,22 +155,6 @@ fn spawn_watcher(app: AppHandle) {
 
 // ---------- menu actions ----------
 
-fn copy_to_clipboard(text: &str) {
-    use std::io::Write;
-    #[cfg(target_os = "macos")]
-    let child = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn();
-    #[cfg(windows)]
-    let child = shell::command("clip").stdin(std::process::Stdio::piped()).spawn();
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let child: std::io::Result<std::process::Child> = Err(std::io::Error::other("no clipboard"));
-    if let Ok(mut c) = child {
-        if let Some(mut stdin) = c.stdin.take() {
-            let _ = stdin.write_all(text.as_bytes());
-        }
-        let _ = c.wait();
-    }
-}
-
 fn open_url(app: &AppHandle, url: &str) {
     let _ = app.opener().open_url(url, None::<&str>);
 }
@@ -159,7 +164,7 @@ fn on_menu(app: &AppHandle, id: &str) {
     let pr = |key: &str| state.snapshot.lock().unwrap().prs.iter().find(|p| p.key == key).cloned();
     match id {
         "open" => open_url(app, "prreview://open"),
-        "refresh" => wake(app),
+        "refresh" => tray::start_refresh(app),
         "settings" => show_settings(app),
         "quit" => app.exit(0),
         _ => {
@@ -169,22 +174,6 @@ fn on_menu(app: &AppHandle, id: &str) {
                 "gh" => {
                     if let Some(p) = pr(key) {
                         open_url(app, &p.url);
-                    }
-                }
-                "copy" => {
-                    // Ready to paste into Claude Desktop, a terminal, wherever.
-                    let Some(p) = pr(key) else { return };
-                    let s = state.settings.lock().unwrap().clone();
-                    copy_to_clipboard(&s.review_command.replace("{url}", &p.url).replace("{number}", &p.number.to_string()).replace("{repo}", &p.repo));
-                }
-                "ignore" => {
-                    if let Some(p) = pr(key) {
-                        ignore::set(&state.data_dir, &p.key, &p.title, true);
-                        let mut snap = state.snapshot.lock().unwrap();
-                        poll::reapply_ignores(&state.data_dir, &mut snap);
-                        sync::write_snapshot(&state.data_dir, &snap);
-                        drop(snap);
-                        tray::refresh(app);
                     }
                 }
                 _ => {}
@@ -232,7 +221,7 @@ async fn discover_repos(state: tauri::State<'_, BarState>) -> Result<Value, Stri
 
 #[tauri::command]
 fn refresh(app: AppHandle) {
-    wake(&app);
+    tray::start_refresh(&app);
 }
 
 #[tauri::command]
@@ -280,6 +269,11 @@ pub fn run() {
                 snapshot: Arc::new(Mutex::new(snap)),
                 apps: Mutex::new(detect_apps()),
                 menu_sig: Mutex::new(String::new()),
+                refresh_requested: AtomicU64::new(0),
+                refresh_done: AtomicU64::new(0),
+                spinning: AtomicBool::new(false),
+                avatars: Mutex::new(HashMap::new()),
+                tooltips: Mutex::new(HashMap::new()),
                 wake: Mutex::new(tx),
             });
 
@@ -297,6 +291,7 @@ pub fn run() {
                 .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
                 .build(app)?;
             tray::refresh(app.handle());
+            avatar::install_menu_hooks(app.handle().clone());
 
             spawn_poller(app.handle().clone(), rx);
             spawn_watcher(app.handle().clone());

@@ -4,11 +4,15 @@ use crate::BarState;
 use pr_core::github::{self, Pr};
 use pr_core::settings::Settings;
 use pr_core::now_ms;
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+use tauri::image::Image;
+use tauri::menu::{IconMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use std::collections::HashMap;
 use tauri::{AppHandle, Manager, Wry};
 
 const MAX_ROWS: usize = 10;
-const TITLE_CHARS: usize = 44;
+const TITLE_CHARS: usize = 48;
 
 pub fn visible(p: &Pr, s: &Settings) -> bool {
     !p.ignored
@@ -53,64 +57,191 @@ fn age(ts: &str) -> String {
     }
 }
 
-/// Minute-level ages tick constantly; letting them alone trigger a rebuild would close the
-/// menu under the pointer every minute. Hours and days still do.
-fn coarse(age: &str) -> &str {
-    if age.ends_with('m') { "" } else { age }
+/// Minute-level ages tick constantly; letting them trigger a rebuild would close the menu
+/// under the pointer every minute. Under an hour reads "new"; hours and days still tick.
+fn coarse(age: String) -> String {
+    if age.ends_with('m') { "new".into() } else { age }
 }
 
 fn repo_ref(p: &Pr) -> String {
     format!("{}#{}", p.repo.split('/').last().unwrap_or(""), p.number)
 }
 
-/// A review request's GitHub state as (icon, sort rank). The icon is the whole status: the
-/// section heading already says it's waiting on you.
-/// Rank: waiting on you first (oldest first), then ones you approved, then just merged/closed.
-fn request_status(p: &Pr) -> (&'static str, u8) {
-    if let Some(st) = closed(p) {
-        return st;
-    }
-    if p.just_approved {
-        // GitHub's mark for an approval.
-        return ("✅", 5);
-    }
-    if github::ci_failed(p) {
-        return ("🔴", 0);
-    }
-    ("○", 0)
+/// A PR's state for the menu: a coloured dot, a plain-words label, and a sort rank.
+/// The dot colours mean the same thing in both sections:
+/// 🟢 good to go · 🔴 broken / blocked on someone · 🟠 conflicts · 🟡 waiting on a person ·
+/// 🔵 CI running · ⚪ draft · 🟣 merged · ⚫ closed.
+pub struct Status {
+    pub dot: &'static str,
+    pub label: &'static str,
+    pub rank: u8,
+}
+
+const fn st(dot: &'static str, label: &'static str, rank: u8) -> Status {
+    Status { dot, label, rank }
 }
 
 /// Merged or closed since it was last open: shown last, then dropped after the grace period.
-fn closed(p: &Pr) -> Option<(&'static str, u8)> {
+fn closed(p: &Pr) -> Option<Status> {
     match p.closed_state.as_deref()? {
-        "MERGED" => Some(("🟣", 9)),
-        _ => Some(("⚫", 9)),
+        "MERGED" => Some(st("🟣", "Merged", 9)),
+        _ => Some(st("⚫", "Closed", 9)),
     }
 }
 
-/// My PR's GitHub state as (icon, sort rank). ✅ only when it can be merged right now.
-fn my_status(p: &Pr) -> (&'static str, u8) {
-    if let Some(st) = closed(p) {
-        return st;
+fn ci_running(p: &Pr) -> bool {
+    matches!(p.ci.as_deref(), Some("PENDING" | "EXPECTED"))
+}
+
+/// Someone else's PR that asks for my review. Rank: needs me first, then ones I approved,
+/// then just merged/closed.
+pub fn request_status(p: &Pr) -> Status {
+    if let Some(s) = closed(p) {
+        return s;
     }
-    if github::ready_to_merge(p) {
-        return ("✅", 0);
+    if p.just_approved {
+        return st("🟢", "You approved", 5);
     }
-    if github::approval(p) == "CHANGES_REQUESTED" {
-        return ("❌", 1);
+    if p.is_draft {
+        return st("⚪", "Draft", 4);
     }
     if github::ci_failed(p) {
-        return ("🔴", 2);
+        return st("🔴", "CI failing", 1);
     }
-    if github::has_conflicts(p) {
-        return ("⚠️", 2);
+    if p.needs_re_review {
+        return st("🟡", "Re-review", 0);
     }
-    // Awaiting review, CI still running, branch behind, or blocked by a rule.
-    ("○", 3)
+    st("🟡", "Needs your review", 0)
 }
 
-fn row(icon: &str, title: &str, detail: &str) -> String {
-    format!("{icon}  {}   —   {detail}", truncate(title, TITLE_CHARS))
+/// My PR. 🟢 only when it can be merged right now.
+pub fn my_status(p: &Pr) -> Status {
+    if let Some(s) = closed(p) {
+        return s;
+    }
+    if p.is_draft {
+        return st("⚪", "Draft", 6);
+    }
+    if github::ready_to_merge(p) {
+        return st("🟢", "Ready to merge", 0);
+    }
+    if github::approval(p) == "CHANGES_REQUESTED" {
+        return st("🔴", "Changes requested", 1);
+    }
+    if github::ci_failed(p) {
+        return st("🔴", "CI failing", 1);
+    }
+    if github::has_conflicts(p) {
+        return st("🟠", "Conflicts", 2);
+    }
+    if ci_running(p) {
+        return st("🔵", "CI running", 3);
+    }
+    if p.merge_state.as_deref() == Some("BEHIND") {
+        return st("🟡", "Behind base", 3);
+    }
+    if github::approval(p) == "APPROVED" {
+        // Approved and green but GitHub still blocks it (required check or rule).
+        return st("🟡", "Approved · blocked", 3);
+    }
+    st("🟡", "Awaiting review", 4)
+}
+
+/// One flat row: `🟡  Title   —   Needs your review · web#12 · 2d`. `author` adds the
+/// login to the detail, for rows that have no avatar to show who it's from.
+fn row(s: &Status, p: &Pr, author: bool, age_text: &str) -> String {
+    let mut detail: Vec<String> = vec![];
+    if author && !p.author.is_empty() {
+        detail.push(p.author.clone());
+    }
+    detail.push(s.label.into());
+    detail.push(repo_ref(p));
+    if !age_text.is_empty() {
+        detail.push(age_text.into());
+    }
+    format!("{}  {}   —   {}", s.dot, truncate(&p.title, TITLE_CHARS), detail.join(" · "))
+}
+
+struct Row {
+    id: String,
+    text: String,
+    icon: Option<Image<'static>>,
+}
+
+// ---------- refresh feedback ----------
+
+/// Spinner drawn as the tray title while a refresh is running. Quarter circles, because
+/// braille frames are too small to read at menu bar size.
+const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
+/// Long enough that a fast fetch still reads as "it did something".
+const MIN_SPIN: Duration = Duration::from_millis(900);
+/// How long the ✓ / ! stays after a refresh finishes.
+const RESULT_FLASH: Duration = Duration::from_millis(1400);
+
+/// Ask the poller for a fetch now, and show it working: spinner in the menu bar,
+/// "Refreshing…" in the menu, then a brief ✓ (or ! on failure) before the count returns.
+pub fn start_refresh(app: &AppHandle) {
+    let state = app.state::<BarState>();
+    state.refresh_requested.fetch_add(1, Ordering::SeqCst);
+    crate::wake(app);
+    // Already animating: that loop will keep going until this request is done too.
+    if state.spinning.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    refresh(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<BarState>();
+        let started = Instant::now();
+        let mut i = 0usize;
+        loop {
+            let done = state.refresh_done.load(Ordering::SeqCst) >= state.refresh_requested.load(Ordering::SeqCst);
+            if done && started.elapsed() >= MIN_SPIN {
+                break;
+            }
+            let frame = SPIN[i % SPIN.len()].to_string();
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(t) = a.tray_by_id("main") {
+                    let _ = t.set_title(Some(frame));
+                }
+            });
+            i += 1;
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        let ok = state.snapshot.lock().unwrap().errors.is_empty();
+        let mark = if ok { "✓" } else { "!" }.to_string();
+        let a = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(t) = a.tray_by_id("main") {
+                let _ = t.set_title(Some(mark));
+            }
+        });
+        std::thread::sleep(RESULT_FLASH);
+        state.spinning.store(false, Ordering::SeqCst);
+        refresh(&app);
+    });
+}
+
+fn refreshing(state: &BarState) -> bool {
+    state.spinning.load(Ordering::SeqCst)
+}
+
+/// Local wall-clock time of the last fetch, e.g. `14:05`. Fixed per fetch, so unlike
+/// "n min ago" it never forces a menu rebuild (which would close an open menu).
+fn clock(ms: u64) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("date").arg("-r").arg((ms / 1000).to_string()).arg("+%H:%M").output();
+        if let Ok(o) = out {
+            let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
+    }
+    let _ = ms;
+    String::new()
 }
 
 /// Rebuild from current state. Safe to call from any thread.
@@ -123,24 +254,28 @@ fn rebuild(app: &AppHandle) {
     let Some(tray) = app.tray_by_id("main") else { return };
     let state = app.state::<BarState>();
     let s = state.settings.lock().unwrap().clone();
-    let (prs, fetched_at) = {
+    let (prs, fetched_at, error) = {
         let snap = state.snapshot.lock().unwrap();
-        (snap.prs.clone(), snap.fetched_at)
+        (snap.prs.clone(), snap.fetched_at, snap.errors.first().cloned())
     };
     let apps = *state.apps.lock().unwrap();
+    let busy = refreshing(&state) || fetched_at == 0;
 
     let mut requested: Vec<&Pr> = prs.iter().filter(|p| visible(p, &s) && has(p, "reviewRequested")).collect();
     let mut mine: Vec<&Pr> = prs.iter().filter(|p| visible(p, &s) && has(p, "mine")).collect();
-    // Requests: waiting on you first, longest waiting at the top.
-    requested.sort_by(|a, b| request_status(a).1.cmp(&request_status(b).1).then(a.created_at.cmp(&b.created_at)));
-    mine.sort_by_key(|p| my_status(p).1);
+    // Requests: needs you first, longest waiting at the top.
+    requested.sort_by(|a, b| request_status(a).rank.cmp(&request_status(b).rank).then(a.created_at.cmp(&b.created_at)));
+    mine.sort_by_key(|p| my_status(p).rank);
 
     // The badge is the open review-request count, matching the first section's heading.
     let open = |v: &Vec<&Pr>| v.iter().filter(|p| p.closed_state.is_none()).count();
     let n = open(&requested);
-    let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
+    // While refreshing, the spinner thread owns the title.
+    if !refreshing(&state) {
+        let _ = tray.set_title(if n > 0 { Some(n.to_string()) } else { None::<String> });
+    }
     let mine_open = open(&mine);
-    let ready = mine.iter().filter(|p| my_status(p).1 == 0).count();
+    let ready = mine.iter().filter(|p| my_status(p).rank == 0).count();
     let updated = if fetched_at == 0 {
         "checking GitHub…".to_string()
     } else {
@@ -154,33 +289,63 @@ fn rebuild(app: &AppHandle) {
         ready
     )));
 
+    let footer = if busy {
+        "Refreshing…".to_string()
+    } else if let Some(e) = &error {
+        format!("⚠️  Couldn't reach GitHub: {}", truncate(e, 48))
+    } else {
+        match clock(fetched_at) {
+            t if t.is_empty() => "Up to date".into(),
+            t => format!("Updated at {t}"),
+        }
+    };
+
+    // Clicking a row opens it: in PR Review when installed, else on GitHub.
+    let open_id = |p: &Pr| if apps.desktop { format!("open:{}", p.key) } else { format!("gh:{}", p.key) };
+
+    // Review requests show the author's avatar; the name moves to the hover tooltip.
+    // Until an avatar is cached the name stays in the row, so it's never anonymous.
+    let avatar_for = |login: &str| -> Option<Image<'static>> {
+        let mut cache = state.avatars.lock().unwrap();
+        cache.entry(login.to_string()).or_insert_with(|| crate::avatar::load(&state.data_dir, login)).clone()
+    };
+    let mut tips: HashMap<String, String> = HashMap::new();
+    let req_rows: Vec<Row> = requested
+        .iter()
+        .take(MAX_ROWS)
+        .map(|p| {
+            let icon = avatar_for(&p.author);
+            let text = row(&request_status(p), p, icon.is_none(), &coarse(age(&p.created_at)));
+            tips.insert(text.clone(), format!("From {}\n{}", p.author, p.title));
+            Row { id: open_id(p), text, icon }
+        })
+        .collect();
+    let my_rows: Vec<Row> = mine
+        .iter()
+        .take(MAX_ROWS)
+        .map(|p| {
+            let text = row(&my_status(p), p, false, "");
+            tips.insert(text.clone(), p.title.clone());
+            Row { id: open_id(p), text, icon: None }
+        })
+        .collect();
+    *state.tooltips.lock().unwrap() = tips;
+
     let build = || -> tauri::Result<Menu<Wry>> {
         let item = |id: String, text: String, enabled: bool| MenuItem::with_id(app, id, text, enabled, None::<&str>);
         let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![];
 
-        // Each PR is a submenu: a menu bar menu can't take right-clicks on its rows.
-        let pr_menu = |p: &Pr, text: String| -> tauri::Result<Submenu<Wry>> {
-            let k = &p.key;
-            let mut actions: Vec<Box<dyn IsMenuItem<Wry>>> = vec![];
-            if apps.desktop {
-                actions.push(Box::new(item(format!("open:{k}"), "Open in PR Review".into(), true)?));
-            }
-            actions.push(Box::new(item(format!("gh:{k}"), "Open on GitHub".into(), true)?));
-            actions.push(Box::new(item(format!("copy:{k}"), "Copy review command".into(), true)?));
-            actions.push(Box::new(PredefinedMenuItem::separator(app)?));
-            actions.push(Box::new(item(format!("ignore:{k}"), "Ignore".into(), true)?));
-            let refs: Vec<&dyn IsMenuItem<Wry>> = actions.iter().map(|b| b.as_ref()).collect();
-            Submenu::with_id_and_items(app, format!("pr:{k}"), text, true, &refs)
-        };
-
         // `count` is open PRs only (it matches the badge); `total` includes just-merged rows.
-        let mut section = |title: &str, rows: Vec<Submenu<Wry>>, empty: &str, count: usize, total: usize| -> tauri::Result<()> {
-            items.push(Box::new(item(format!("h:{title}"), format!("{}  ·  {count}", title.to_uppercase()), false)?));
+        let mut section = |title: &str, rows: &[Row], empty: &str, count: usize, total: usize| -> tauri::Result<()> {
+            items.push(Box::new(item(format!("h:{title}"), format!("{title}  ({count})"), false)?));
             if rows.is_empty() {
                 items.push(Box::new(item(format!("e:{title}"), format!("      {empty}"), false)?));
             }
-            for row in rows {
-                items.push(Box::new(row));
+            for r in rows {
+                match &r.icon {
+                    Some(icon) => items.push(Box::new(IconMenuItem::with_id(app, r.id.clone(), r.text.clone(), true, Some(icon.clone()), None::<&str>)?)),
+                    None => items.push(Box::new(item(r.id.clone(), r.text.clone(), true)?)),
+                }
             }
             if total > MAX_ROWS {
                 let more = if apps.desktop { "open" } else { "noop" };
@@ -190,26 +355,15 @@ fn rebuild(app: &AppHandle) {
             Ok(())
         };
 
-        let mut req_rows = vec![];
-        for p in requested.iter().take(MAX_ROWS) {
-            let (icon, _) = request_status(p);
-            let detail = [repo_ref(p), age(&p.created_at)].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · ");
-            req_rows.push(pr_menu(p, row(icon, &p.title, &detail))?);
-        }
-        section("Review requested", req_rows, "Nothing waiting on you 🎉", n, requested.len())?;
-
-        let mut my_rows = vec![];
-        for p in mine.iter().take(MAX_ROWS) {
-            let (icon, _) = my_status(p);
-            my_rows.push(pr_menu(p, row(icon, &p.title, &repo_ref(p)))?);
-        }
+        section("Review requested", &req_rows, "Nothing waiting on you 🎉", n, requested.len())?;
         let empty = if s.actionable_only { "Nothing to act on" } else { "No open PRs" };
-        section("My PRs", my_rows, empty, mine_open, mine.len())?;
+        section("My PRs", &my_rows, empty, mine_open, mine.len())?;
 
+        items.push(Box::new(item("status".into(), footer.clone(), false)?));
+        items.push(Box::new(MenuItem::with_id(app, "refresh", if busy { "Refreshing…" } else { "Refresh now" }, !busy, Some("CmdOrCtrl+R"))?));
         if apps.desktop {
             items.push(Box::new(item("open".into(), "Open PR Review".into(), true)?));
         }
-        items.push(Box::new(MenuItem::with_id(app, "refresh", "Refresh", true, Some("CmdOrCtrl+R"))?));
         items.push(Box::new(MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?));
         items.push(Box::new(PredefinedMenuItem::separator(app)?));
         items.push(Box::new(MenuItem::with_id(app, "quit", "Quit PR Bar", true, Some("CmdOrCtrl+Q"))?));
@@ -217,14 +371,8 @@ fn rebuild(app: &AppHandle) {
         Menu::with_items(app, &refs)
     };
     // Replacing the menu closes it if it's open, so only do it when the contents changed.
-    let sig = format!(
-        "{:?}|{:?}|{:?}|{}|{}",
-        requested.iter().map(|p| (&p.key, &p.title, request_status(p), repo_ref(p), coarse(&age(&p.created_at)).to_string(), p.closed_state.is_some())).collect::<Vec<_>>(),
-        mine.iter().map(|p| (&p.key, &p.title, my_status(p), p.closed_state.is_some())).collect::<Vec<_>>(),
-        (apps.desktop, s.actionable_only),
-        n,
-        mine_open,
-    );
+    let ids = |v: &[Row]| v.iter().map(|r| format!("{}{}{}", r.id, r.text, r.icon.is_some())).collect::<Vec<_>>();
+    let sig = format!("{:?}|{:?}|{footer}|{busy}|{}|{n}|{mine_open}", ids(&req_rows), ids(&my_rows), apps.desktop);
     let mut last = state.menu_sig.lock().unwrap();
     if *last == sig {
         return;

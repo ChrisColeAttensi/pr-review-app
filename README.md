@@ -4,8 +4,9 @@ Two macOS apps for your GitHub pull requests. Install either or both.
 
 **PR Bar** sits in the menu bar. It watches GitHub and sends the notifications.
 
-- **Menu:** what needs you right now, in GitHub's terms, one icon per PR. Review requests: ○ waiting on you, 🔴 its CI is failing, ✅ you approved (kept for a while so you can merge), oldest first. Your own PRs: ✅ ready to merge now (approved, checks green, no conflicts), ❌ changes requested, 🔴 CI failing, ⚠️ merge conflicts, ○ anything else (awaiting review, CI running, branch behind). Just merged: 🟣; just closed: ⚫. The badge counts review requests.
-- **Each PR** has a submenu: Open in PR Review, Open on GitHub, Copy review command, Ignore. "Copy review command" copies your review command for that PR (e.g. `/chriscole-skills:pr-review <url>`), ready to paste into Claude Desktop or a terminal.
+- **Menu:** what needs you right now, one row per PR: a coloured dot, the title, then its status in words, repo and age. Review requests show the author's avatar (hover for their name and the full title), needs-you first, oldest first. The dots mean the same in both sections: 🟢 good to go (ready to merge / you approved), 🔴 CI failing or changes requested, 🟠 merge conflicts, 🔵 CI running, 🟡 waiting on a person (needs your review, awaiting review, behind base), ⚪ draft, 🟣 just merged, ⚫ just closed. The badge counts review requests.
+- **Click a PR** to open it in PR Review, or on GitHub when PR Review isn't installed. Ignore it from PR Review.
+- **Refresh now** (⌘R) spins the menu bar badge until GitHub answers, then shows ✓ (or ! on an error). The menu footer says when it last updated.
 - **Notifications:** new review requests, CI results and reviews on your PRs, and new PRs in watched repos. Each kind can be switched on or off.
 
 **PR Review** is the desktop app: a review UI backed by Claude.
@@ -93,7 +94,7 @@ brew uninstall --zap --cask pr-review pr-bar
 
 | Where | What |
 | --- | --- |
-| Menu bar (PR Bar) | Hover a PR for Open in PR Review, Open on GitHub, Copy review command, Ignore. |
+| Menu bar (PR Bar) | Click a PR to open it. ⌘R refreshes, ⌘, opens Settings. |
 | Sidebar | `j` / `k` to move, `/` to filter, right-click for Ignore, Open on GitHub, Explain, Run pr-review. |
 | PR tabs | Overview · Walkthrough · Files · Claude (pr-review + chat) · My notes (`⌘1`–`⌘5`) |
 | Header | Review… (approve / request changes / comment), Merge…, Explain, Run pr-review. Buttons show a time and cost estimate learned from your own past runs. |
